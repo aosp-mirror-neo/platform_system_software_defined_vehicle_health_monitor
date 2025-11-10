@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::service_bundle_manager::ServiceHealthConfig;
+use crate::hb_config::HeartbeatMonitoringConfig;
 use sdv_comms::id::ServiceFqin;
 use sdv_dump::DumpStateReporter;
 use std::fmt::Display;
@@ -26,7 +26,7 @@ pub enum EntityHealthStatus {
 pub trait EntityMonitor: DumpStateReporter {
     fn get_health_status(&self) -> EntityHealthStatus;
     // TODO: to be removed as part of SB crash detection work
-    fn get_config(&self) -> &ServiceHealthConfig;
+    fn get_config(&self) -> &HeartbeatMonitoringConfig;
 }
 
 pub type AgentBinderId = String;
@@ -70,7 +70,7 @@ impl EntityMonitor for SBRecoveryState {
         }
     }
 
-    fn get_config(&self) -> &ServiceHealthConfig {
+    fn get_config(&self) -> &HeartbeatMonitoringConfig {
         unimplemented!("This should never be called, it only applies to HB monitors.");
     }
 }

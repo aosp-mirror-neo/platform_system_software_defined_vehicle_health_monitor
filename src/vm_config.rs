@@ -88,7 +88,7 @@ impl Default for Config {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::Config;
+    use crate::vm_config::Config;
     use googletest::prelude::*;
     use rustutils::android::system_properties::PropertyWatcherError;
 

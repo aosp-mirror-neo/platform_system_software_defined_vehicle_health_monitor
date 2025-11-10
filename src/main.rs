@@ -30,8 +30,8 @@ use sdv_health_monitor::power_state::PowerStateReceiverFactoryImpl;
 use sdv_health_monitor::sb_recovery_listener::SbRecoveryEventSourceImpl;
 use sdv_health_monitor::HealthMonitorService;
 use sdv_health_monitor::{
-    authorization::AuthorizationImpl, config::Config,
-    sb_monitor_factory::ServiceBundleMonitorFactoryImpl, HealthMonitor, MessagePublisher,
+    authorization::AuthorizationImpl, hb_monitor_factory::HeartbeatMonitorFactoryImpl,
+    vm_config::Config, HealthMonitor, MessagePublisher,
 };
 use sdv_mw_rs_com_sdv_google_health_health_monitor_service_bundle::{
     publisher, HealthMonitorServiceBundle,
@@ -128,11 +128,8 @@ async fn setup_communication(
     let authorization = AuthorizationImpl::new(id);
     let comms = Arc::new(SdvComms { context });
     let sd = Arc::new(ServiceDiscoveryManager::new(context));
-    let heartbeat_monitor_factory = Box::new(ServiceBundleMonitorFactoryImpl::new(
-        comms.clone(),
-        sd,
-        power_state_receiver_factory,
-    ));
+    let heartbeat_monitor_factory =
+        Box::new(HeartbeatMonitorFactoryImpl::new(comms.clone(), sd, power_state_receiver_factory));
     let (registration_commands_tx, r) = std::sync::mpsc::channel::<RegistrationCommand>();
     let mut mw = HealthMonitorServiceBundle::new(
         comms,

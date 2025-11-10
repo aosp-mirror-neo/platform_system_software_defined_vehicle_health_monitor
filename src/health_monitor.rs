@@ -14,7 +14,7 @@
 #![allow(missing_docs)]
 
 use crate::bundle_registration::RegistrationCommand;
-pub use crate::message_publisher::MessagePublisher;
+pub use crate::health_reporter::MessagePublisher;
 use crate::monitor_manager::MonitorManager;
 use crate::monitor_model::EntityHealthStatus;
 use crate::monitor_model::EntityMonitor;
@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use authorization::AuthorizationImpl;
 use bundle_registration::RegistrationCommandError;
 pub use com_sdv_google_health_health_monitor_service_rpc::Interface as HealthMonitorService;
+use hb_monitor_factory::HeartbeatMonitorFactory;
 use health_api::{
     health_monitor_service::{
         ListAllServiceBundlesRequest, ListAllServiceBundlesResponse,
@@ -35,7 +36,6 @@ use health_api::{
 use health_reporter::HealthReporter;
 use log::{error, warn};
 use protobuf::well_known_types::timestamp::Timestamp;
-use sb_monitor_factory::ServiceBundleMonitorFactory;
 pub use sdv_dump::DumpBinderConnection;
 use sdv_dump::DumpStateReporter;
 use std::ops::DerefMut;
@@ -58,17 +58,16 @@ use tracing::instrument;
 pub mod agent_monitor;
 pub mod authorization;
 pub mod bundle_registration;
-pub mod config;
+mod hb_config;
+pub mod hb_monitor;
+pub mod hb_monitor_factory;
 mod health_reporter;
-mod message_publisher;
 pub mod monitor_manager;
 pub mod monitor_model;
 pub mod power_state;
 pub mod read_sys_prop;
-pub mod sb_monitor;
-pub mod sb_monitor_factory;
 pub mod sb_recovery_listener;
-mod service_bundle_manager;
+pub mod vm_config;
 
 pub struct HealthMonitor {
     background_thread: Mutex<Option<thread::JoinHandle<()>>>,
@@ -308,13 +307,13 @@ impl DumpStateReporter for HealthMonitor {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::message_publisher::MockMessagePublisher;
+    use crate::health_reporter::MockMessagePublisher;
     use crate::tests::utils::StringWriter;
+    use hb_config::HeartbeatMonitoringConfig;
     use mockall::mock;
     use mockall::predicate::eq;
     use sdv_comms::id::ServiceFqin;
     use sdv_status_rs::SdvStatusCode;
-    use service_bundle_manager::ServiceHealthConfig;
     use std::ffi::CStr;
     use std::io::{Error, Write};
     use std::str::FromStr;
@@ -323,7 +322,7 @@ pub mod tests {
     mock! {
         pub EntityMonitor {} // mock name: MockEntityMonitor
         impl EntityMonitor for EntityMonitor{
-            fn get_config(&self) -> &ServiceHealthConfig;
+            fn get_config(&self) -> &HeartbeatMonitoringConfig;
             fn get_health_status(&self) -> EntityHealthStatus;
 
         }
@@ -334,7 +333,7 @@ pub mod tests {
 
     static HEALTHY_SERVICE_FQIN_STR: &str = "vm:com.google.sdv.HealthyServiceBundle/sample";
     static UNHEALTHY_SERVICE_FQIN_STR: &str = "vm:com.google.sdv.UnhealthyServiceBundle/sample";
-    static DEFAULT_CONFIG: ServiceHealthConfig = ServiceHealthConfig {
+    static DEFAULT_CONFIG: HeartbeatMonitoringConfig = HeartbeatMonitoringConfig {
         initial_delay_ms: 100u64,
         period_ms: 200u64,
         num_periods: 3u64,
@@ -371,7 +370,7 @@ pub mod tests {
         let fqin = ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap();
 
         let config1 = DEFAULT_CONFIG.clone();
-        let config2 = ServiceHealthConfig { initial_delay_ms: 0xCAFEu64, ..DEFAULT_CONFIG };
+        let config2 = HeartbeatMonitoringConfig { initial_delay_ms: 0xCAFEu64, ..DEFAULT_CONFIG };
         let mut monitor1 = MockEntityMonitor::new();
         let mut monitor2 = MockEntityMonitor::new();
         monitor1.expect_get_config().return_const(config1.clone());

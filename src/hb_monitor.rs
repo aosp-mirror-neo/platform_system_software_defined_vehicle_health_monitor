@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::hb_config::HeartbeatMonitoringConfig;
 use crate::monitor_model::EntityHealthStatus;
 use crate::monitor_model::EntityMonitor;
 use crate::power_state::PowerState;
 use crate::power_state::PowerStateInfo;
-use crate::service_bundle_manager::ServiceHealthConfig;
 use futures::future;
 use futures::stream;
 use futures::StreamExt;
@@ -48,7 +48,7 @@ impl HeartbeatEvent {
     }
 }
 
-pub struct ServiceBundleMonitor {
+pub struct HeartbeatMonitor {
     heartbeat_listener_task: tokio::task::JoinHandle<()>,
     last_event: watch::Receiver<HeartbeatEvent>,
     config: MonitorConfig,
@@ -56,22 +56,22 @@ pub struct ServiceBundleMonitor {
     power_state_receiver: watch::Receiver<PowerStateInfo>,
 }
 
-impl Drop for ServiceBundleMonitor {
+impl Drop for HeartbeatMonitor {
     fn drop(&mut self) {
         self.heartbeat_listener_task.abort();
     }
 }
 
-impl ServiceBundleMonitor {
+impl HeartbeatMonitor {
     pub fn new(
         heartbeat_publication: impl futures::stream::Stream<Item = SdvResult<Vec<ServiceHeartbeat>>>
             + Send
             + Unpin
             + 'static,
-        health_config: ServiceHealthConfig,
+        health_config: HeartbeatMonitoringConfig,
         current_time_provider: Box<dyn Fn() -> SystemTime + Send + Sync + 'static>,
         power_state_receiver: watch::Receiver<PowerStateInfo>,
-    ) -> ServiceBundleMonitor {
+    ) -> HeartbeatMonitor {
         let (tx, rx) =
             tokio::sync::watch::channel(HeartbeatEvent::StartedMonitoring(current_time_provider()));
         Self {
@@ -92,7 +92,7 @@ impl ServiceBundleMonitor {
     }
 }
 
-impl DumpStateReporter for ServiceBundleMonitor {
+impl DumpStateReporter for HeartbeatMonitor {
     fn dump(
         &self,
         writer: &mut dyn std::io::Write,
@@ -110,8 +110,8 @@ impl DumpStateReporter for ServiceBundleMonitor {
     }
 }
 
-impl EntityMonitor for ServiceBundleMonitor {
-    fn get_config(&self) -> &ServiceHealthConfig {
+impl EntityMonitor for HeartbeatMonitor {
+    fn get_config(&self) -> &HeartbeatMonitoringConfig {
         &self.config.service_config
     }
 
@@ -192,13 +192,13 @@ where
 }
 
 struct MonitorConfig {
-    service_config: ServiceHealthConfig,
+    service_config: HeartbeatMonitoringConfig,
     allowed_delay_since_last_heartbeat: Duration,
     allowed_delay_since_monitor_start: Duration,
 }
 
-impl From<ServiceHealthConfig> for MonitorConfig {
-    fn from(val: ServiceHealthConfig) -> MonitorConfig {
+impl From<HeartbeatMonitoringConfig> for MonitorConfig {
+    fn from(val: HeartbeatMonitoringConfig) -> MonitorConfig {
         MonitorConfig {
             allowed_delay_since_last_heartbeat: Duration::from_millis(
                 val.period_ms
@@ -256,7 +256,7 @@ mod tests {
             (tx, Box::pin(WatchStream::from_changes(rx).map(|hbs| hbs.map_err(SdvStatus::new))))
         }
 
-        impl ServiceBundleMonitor {
+        impl HeartbeatMonitor {
             /// Useful for waiting until async hb stream input was propagated, ensuring
             /// reproductibility
             pub async fn wait_for_hb_with_timeout(
@@ -281,9 +281,9 @@ mod tests {
     #[tokio::test]
     async fn monitor_is_healthy_upon_creation() {
         let (_tx, rx) = watch::channel(PowerStateInfo::default());
-        let monitor = ServiceBundleMonitor::new(
+        let monitor = HeartbeatMonitor::new(
             stream::pending(),
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 100,
                 period_ms: 10,
                 num_periods: 10,
@@ -297,34 +297,30 @@ mod tests {
 
     #[tokio::test]
     async fn configs_equal() {
-        let config = ServiceHealthConfig {
+        let config = HeartbeatMonitoringConfig {
             initial_delay_ms: 100,
             period_ms: 10,
             num_periods: 10,
             task_duration_ms: 2,
         };
         let (_tx, rx) = watch::channel(PowerStateInfo::default());
-        let monitor = ServiceBundleMonitor::new(
-            stream::pending(),
-            config.clone(),
-            Box::new(SystemTime::now),
-            rx,
-        );
+        let monitor =
+            HeartbeatMonitor::new(stream::pending(), config.clone(), Box::new(SystemTime::now), rx);
         assert_eq!(*monitor.get_config(), config);
     }
 
     #[tokio::test]
     async fn configs_differ() {
-        let config = ServiceHealthConfig {
+        let config = HeartbeatMonitoringConfig {
             initial_delay_ms: 100,
             period_ms: 10,
             num_periods: 10,
             task_duration_ms: 2,
         };
         let (_tx, rx) = watch::channel(PowerStateInfo::default());
-        let monitor = ServiceBundleMonitor::new(
+        let monitor = HeartbeatMonitor::new(
             stream::pending(),
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 1000,
                 period_ms: 10,
                 num_periods: 10,
@@ -348,9 +344,9 @@ mod tests {
         ]);
 
         let (_tx, rx) = watch::channel(PowerStateInfo::default());
-        let monitor = ServiceBundleMonitor::new(
+        let monitor = HeartbeatMonitor::new(
             stream::pending(),
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 2000,
                 period_ms: 100,
                 num_periods: 1000,
@@ -374,9 +370,9 @@ mod tests {
         ]);
 
         let (_tx, rx) = watch::channel(PowerStateInfo::default());
-        let monitor = ServiceBundleMonitor::new(
+        let monitor = HeartbeatMonitor::new(
             stream::pending(),
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 500,
                 period_ms: 100,
                 num_periods: 1,
@@ -405,9 +401,9 @@ mod tests {
         };
 
         let (_tx, rx) = watch::channel(PowerStateInfo::default());
-        let mut monitor = ServiceBundleMonitor::new(
+        let mut monitor = HeartbeatMonitor::new(
             stream::once(future::ready(Ok(vec![hb.clone()]))),
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 500,
                 period_ms: 100,
                 num_periods: 1,
@@ -437,9 +433,9 @@ mod tests {
         ]);
 
         let (_tx, rx) = watch::channel(PowerStateInfo::default());
-        let mut monitor = ServiceBundleMonitor::new(
+        let mut monitor = HeartbeatMonitor::new(
             stream::once(future::ready(Ok(vec![hb.clone()]))),
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 500,
                 period_ms: 100,
                 num_periods: 1,
@@ -469,9 +465,9 @@ mod tests {
         ]);
 
         let (_tx, rx) = watch::channel(PowerStateInfo::default());
-        let mut monitor = ServiceBundleMonitor::new(
+        let mut monitor = HeartbeatMonitor::new(
             stream::once(future::ready(Ok(vec![hb.clone()]))),
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 500,
                 period_ms: 100,
                 num_periods: 1,
@@ -513,9 +509,9 @@ mod tests {
         ]);
 
         let (_tx, rx) = watch::channel(PowerStateInfo::default());
-        let mut monitor = ServiceBundleMonitor::new(
+        let mut monitor = HeartbeatMonitor::new(
             stream::once(future::ready(Ok(vec![hb.clone()]))),
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 1000,
                 period_ms: 1000,
                 num_periods: 3,
@@ -559,9 +555,9 @@ mod tests {
         let hb_stream = stream::once(future::ready(Ok(vec![hb.clone()])));
 
         let (_tx, rx) = watch::channel(PowerStateInfo::default());
-        let mut monitor = ServiceBundleMonitor::new(
+        let mut monitor = HeartbeatMonitor::new(
             hb_stream,
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 50,
                 period_ms: 5,
                 num_periods: 1,
@@ -604,9 +600,9 @@ mod tests {
         let time_provider = Box::new(move || time_mock.now());
 
         let (_tx, rx) = watch::channel(PowerStateInfo::default());
-        let mut hb = ServiceBundleMonitor::new(
+        let mut hb = HeartbeatMonitor::new(
             stream,
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 1,
                 period_ms: 100,
                 num_periods: 1,
@@ -679,9 +675,9 @@ mod tests {
         ]);
 
         let (_tx, rx) = watch::channel(PowerStateInfo::default());
-        let mut monitor = ServiceBundleMonitor::new(
+        let mut monitor = HeartbeatMonitor::new(
             hb_stream,
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 500,
                 period_ms: 100,
                 num_periods: 1,
@@ -718,9 +714,9 @@ mod tests {
 
         let (_tx, rx) =
             watch::channel(PowerStateInfo { stage: PowerState::Suspended, last_resume_time: None });
-        let monitor = ServiceBundleMonitor::new(
+        let monitor = HeartbeatMonitor::new(
             stream::pending(),
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 0,
                 period_ms,
                 num_periods,
@@ -762,9 +758,9 @@ mod tests {
             stage: PowerState::Running,
             last_resume_time: Some(resume_time),
         });
-        let monitor = ServiceBundleMonitor::new(
+        let monitor = HeartbeatMonitor::new(
             stream::pending(),
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms,
                 period_ms: 0,
                 num_periods: 0,
@@ -812,9 +808,9 @@ mod tests {
             stage: PowerState::Running,
             last_resume_time: Some(resume_time),
         });
-        let mut monitor = ServiceBundleMonitor::new(
+        let mut monitor = HeartbeatMonitor::new(
             stream::once(future::ready(Ok(vec![hb.clone()]))),
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 0,
                 period_ms: allowed_hb_interval_ms,
                 num_periods: 1,
@@ -862,9 +858,9 @@ mod tests {
             stage: PowerState::Running,
             last_resume_time: Some(resume_time),
         });
-        let mut monitor = ServiceBundleMonitor::new(
+        let mut monitor = HeartbeatMonitor::new(
             stream::once(future::ready(Ok(vec![hb.clone()]))),
-            ServiceHealthConfig {
+            HeartbeatMonitoringConfig {
                 initial_delay_ms: 0,
                 period_ms: allowed_hb_interval_ms,
                 num_periods: 1,
@@ -881,7 +877,7 @@ mod tests {
     #[tokio::test]
     async fn monitor_is_unhealthy_if_hbs_missed_regardless_of_shutdown_stage() {
         // Setup a configuration that would otherwise result in Unhealthy status
-        let config = ServiceHealthConfig {
+        let config = HeartbeatMonitoringConfig {
             initial_delay_ms: 100,
             period_ms: 100,
             num_periods: 1,
@@ -900,7 +896,7 @@ mod tests {
             last_resume_time: Some(SystemTime::UNIX_EPOCH),
         });
 
-        let monitor = ServiceBundleMonitor::new(
+        let monitor = HeartbeatMonitor::new(
             stream::pending(), // No heartbeats
             config,
             Box::new(move || mock_time.now()),

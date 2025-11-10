@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::async_trait;
+use crate::hb_config::HeartbeatMonitoringConfig;
 use crate::monitor_model::EntityMonitor;
-use crate::service_bundle_manager::ServiceHealthConfig;
 use crate::AuthorizationImpl;
-use crate::ServiceBundleMonitorFactory;
+use crate::HeartbeatMonitorFactory;
 use com_sdv_google_health_health_monitor_registration_service_rpc::Interface as HealthMonitorRegistrationService;
 use health_api::health_monitor_registration_service::{
     RegisterConfigurationRequest, RegisterConfigurationResponse, UnregisterConfigurationRequest,
@@ -43,17 +43,17 @@ pub enum RegistrationCommandError {
 }
 
 pub struct ServiceBundleRegistrationInterface {
-    sb_monitor_factory: Box<dyn ServiceBundleMonitorFactory>,
+    hb_monitor_factory: Box<dyn HeartbeatMonitorFactory>,
     registration_commands_tx: std::sync::mpsc::Sender<RegistrationCommand>,
     authorization: AuthorizationImpl,
 }
 impl ServiceBundleRegistrationInterface {
     pub fn new(
-        sb_monitor_factory: Box<dyn ServiceBundleMonitorFactory>,
+        sb_monitor_factory: Box<dyn HeartbeatMonitorFactory>,
         registration_commands_tx: std::sync::mpsc::Sender<RegistrationCommand>,
         authorization: AuthorizationImpl,
     ) -> Self {
-        Self { sb_monitor_factory, registration_commands_tx, authorization }
+        Self { hb_monitor_factory: sb_monitor_factory, registration_commands_tx, authorization }
     }
 }
 #[async_trait]
@@ -84,10 +84,10 @@ impl HealthMonitorRegistrationService for ServiceBundleRegistrationInterface {
                 ))
             }
         };
-        let config = ServiceHealthConfig::try_from(config)
+        let config = HeartbeatMonitoringConfig::try_from(config)
             .map_err(|err| SdvStatus::with_message(SdvStatusCode::InvalidArgument, err.as_str()))?;
 
-        let sb_monitor = self.sb_monitor_factory.new_monitor(&fqin, config).await?;
+        let sb_monitor = self.hb_monitor_factory.new_monitor(&fqin, config).await?;
 
         info!("Queueing up register for fqin:{}", fqin);
         let (tx, rx) = oneshot::channel();
@@ -138,7 +138,7 @@ impl HealthMonitorRegistrationService for ServiceBundleRegistrationInterface {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sb_monitor_factory::MockServiceBundleMonitorFactory;
+    use crate::hb_monitor_factory::MockHeartbeatMonitorFactory;
     use crate::tests::MockEntityMonitor;
     use health_api::health_config::HealthConfiguration;
     use protobuf::MessageField;
@@ -159,11 +159,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_configuration_successful() {
-        let mut monitor_factory = MockServiceBundleMonitorFactory::new();
-        let service_config = ServiceHealthConfig::try_from(DEFAULT_VALID_CONFIG.clone()).unwrap();
+        let mut monitor_factory = MockHeartbeatMonitorFactory::new();
+        let service_config =
+            HeartbeatMonitoringConfig::try_from(DEFAULT_VALID_CONFIG.clone()).unwrap();
         monitor_factory.expect_new_monitor().returning(|_, _| {
             let service_config =
-                ServiceHealthConfig::try_from(DEFAULT_VALID_CONFIG.clone()).unwrap();
+                HeartbeatMonitoringConfig::try_from(DEFAULT_VALID_CONFIG.clone()).unwrap();
             let mut monitor = MockEntityMonitor::new();
             monitor.expect_get_config().return_const(service_config);
             Ok(Box::new(monitor))
@@ -205,7 +206,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_error_correctly_propagated_from_health_monitor_to_rpc_response() {
-        let mut monitor_factory = MockServiceBundleMonitorFactory::new();
+        let mut monitor_factory = MockHeartbeatMonitorFactory::new();
         monitor_factory
             .expect_new_monitor()
             .returning(|_, _| Ok(Box::new(MockEntityMonitor::new())));
@@ -244,7 +245,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_configuration_missing_config() {
-        let monitor_factory = MockServiceBundleMonitorFactory::new();
+        let monitor_factory = MockHeartbeatMonitorFactory::new();
         let auth = AuthorizationImpl::new(ServiceFqin::from_str(HEALTH_MONITOR_FQIN).unwrap());
         let (command_tx, _) = std::sync::mpsc::channel();
         let interface =
@@ -263,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_configuration_invalid_config() {
-        let monitor_factory = MockServiceBundleMonitorFactory::new();
+        let monitor_factory = MockHeartbeatMonitorFactory::new();
         let auth = AuthorizationImpl::new(ServiceFqin::from_str(HEALTH_MONITOR_FQIN).unwrap());
         let (command_tx, _) = std::sync::mpsc::channel();
         let interface =
@@ -290,7 +291,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_configuration_unauthorized_client() {
-        let monitor_factory = MockServiceBundleMonitorFactory::new();
+        let monitor_factory = MockHeartbeatMonitorFactory::new();
         let auth = AuthorizationImpl::new(ServiceFqin::from_str(HEALTH_MONITOR_FQIN).unwrap());
         let (command_tx, _) = std::sync::mpsc::channel();
         let interface =
@@ -320,7 +321,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unregister_configuration_successful() {
-        let monitor_factory = MockServiceBundleMonitorFactory::new();
+        let monitor_factory = MockHeartbeatMonitorFactory::new();
         let auth = AuthorizationImpl::new(ServiceFqin::from_str(HEALTH_MONITOR_FQIN).unwrap());
         let (command_tx, command_rx) = std::sync::mpsc::channel();
         let interface =
