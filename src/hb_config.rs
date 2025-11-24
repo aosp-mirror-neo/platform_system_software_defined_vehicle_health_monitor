@@ -71,7 +71,6 @@ impl TryFrom<HealthConfiguration> for HeartbeatMonitoringConfig {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[test]

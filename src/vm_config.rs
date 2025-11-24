@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Implementation for Health Monitor Config.
-//!  - parsing of textproto config
+//! Implementation for Health Monitor global config retrieval and validation.
 
 use anyhow::anyhow;
 use health_api::health_monitor_config::{BinderServiceAgent, HealthMonitorConfiguration};

@@ -16,15 +16,15 @@
 
 # This manifest will be used by a config-only APEX for the HealthMonitor.
 sdv_service_bundle_metadata {
-    # This name must match the agent's Bundle Name
-    name: "HealthMonitorServiceBundle"
-    version_number: 1
-    version_name: "1"
+  # This name must match the agent's Bundle Name
+  name: "HealthMonitorServiceBundle"
+  version_number: 1
+  version_name: "1"
 
-    # Reference the manifest itself to mark this as a config-only declaration.
-    native_library_path: "etc/sdv_service_bundles_manifest.textproto"
+  # Reference the manifest itself to mark this as a config-only declaration.
+  native_library_path: "etc/sdv_service_bundles_manifest.textproto"
 
-    access_control_list_policy_path: "etc/acl.textproto"
+  access_control_list_policy_path: "etc/acl.textproto"
 
-    vsidl_schemas_path: "etc/vsidl_provider/HealthMonitorServiceBundle-vsidl-config.binpb"
+  vsidl_schemas_path: "etc/vsidl_provider/HealthMonitorServiceBundle-vsidl-config.binpb"
 }

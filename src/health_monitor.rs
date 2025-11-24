@@ -62,6 +62,7 @@ mod hb_config;
 pub mod hb_monitor;
 pub mod hb_monitor_factory;
 mod health_reporter;
+mod implicit_monitoring_db;
 pub mod monitor_manager;
 pub mod monitor_model;
 pub mod power_state;
