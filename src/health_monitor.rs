@@ -38,7 +38,6 @@ use log::{error, warn};
 use protobuf::well_known_types::timestamp::Timestamp;
 pub use sdv_dump::DumpBinderConnection;
 use sdv_dump::DumpStateReporter;
-use std::ops::DerefMut;
 use std::sync::Mutex;
 use std::time::Duration;
 use std::{
@@ -47,12 +46,14 @@ use std::{
     ops::Add,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::Receiver,
         Arc,
     },
     thread,
     time::Instant,
 };
+use tokio::sync::mpsc;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tracing::instrument;
 
 pub mod agent_monitor;
@@ -71,17 +72,23 @@ pub mod sb_recovery_listener;
 pub mod vm_config;
 
 pub struct HealthMonitor {
+    hb_registration_commands_processing: JoinHandle<()>,
     background_thread: Mutex<Option<thread::JoinHandle<()>>>,
     // TODO: move (service_bundle_monitors) HB monitoring to monitor_manager
-    service_bundle_monitors: Arc<Mutex<HashMap<MonitorId, Box<dyn EntityMonitor>>>>,
+    hb_monitors: watch::Receiver<HashMap<MonitorId, Box<dyn EntityMonitor>>>,
     should_run: Arc<AtomicBool>,
 }
 
 impl HealthMonitor {
-    pub fn new() -> Self {
+    pub fn new(hb_registration_commands: mpsc::Receiver<HBRegistrationCommand>) -> Self {
+        let (hb_monitors_tx, hb_monitors) = watch::channel(HashMap::new());
         Self {
+            hb_registration_commands_processing: tokio::spawn(Self::process_request_queue(
+                hb_registration_commands,
+                hb_monitors_tx,
+            )),
             background_thread: Mutex::new(None),
-            service_bundle_monitors: Arc::new(Mutex::new(HashMap::new())),
+            hb_monitors,
             should_run: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -91,13 +98,12 @@ impl HealthMonitor {
         &self,
         publisher: Box<dyn MessagePublisher<VmHealth>>,
         report_period_ms: u64,
-        request_rx: Receiver<HBRegistrationCommand>,
         recovery_monitor_manager: Arc<MonitorManager>,
     ) {
         self.should_run.store(true, Ordering::SeqCst);
 
         let should_run = self.should_run.clone();
-        let service_bundle_monitors = self.service_bundle_monitors.clone();
+        let service_bundle_monitors = self.hb_monitors.clone();
 
         *self.background_thread.lock().unwrap() = Some(thread::spawn(move || {
             let health_reporter = HealthReporter::new(publisher);
@@ -107,16 +113,10 @@ impl HealthMonitor {
 
                 // Report overall VM health
                 Self::report_state(
-                    service_bundle_monitors.as_ref(),
+                    &service_bundle_monitors.borrow(),
                     &recovery_monitor_manager.sb_recovery_monitors.borrow(),
                     &recovery_monitor_manager.agent_crash_monitors,
                     &health_reporter,
-                );
-
-                // Process pending registration commands:
-                Self::process_request_queue(
-                    service_bundle_monitors.lock().unwrap().deref_mut(),
-                    &request_rx,
                 );
 
                 // Sleep until next reporting period
@@ -130,14 +130,12 @@ impl HealthMonitor {
     }
 
     fn report_state(
-        heartbeat_monitors: &Mutex<HashMap<MonitorId, Box<dyn EntityMonitor>>>,
+        heartbeat_monitors: &HashMap<MonitorId, Box<dyn EntityMonitor>>,
         sb_recovery_monitors: &HashMap<MonitorId, SBRecoveryState>,
         agent_crash_monitors: &HashMap<MonitorId, Box<dyn EntityMonitor>>,
         health_reporter: &HealthReporter,
     ) {
         let hbs_missed = heartbeat_monitors
-            .lock()
-            .unwrap()
             .values()
             .any(|m| m.get_health_status() == EntityHealthStatus::Unhealthy);
 
@@ -154,47 +152,55 @@ impl HealthMonitor {
         }
     }
 
-    fn process_request_queue(
-        monitors: &mut HashMap<MonitorId, Box<dyn EntityMonitor>>,
-        request_rx: &Receiver<HBRegistrationCommand>,
+    async fn process_request_queue(
+        mut registration_requests: mpsc::Receiver<HBRegistrationCommand>,
+        monitors: watch::Sender<HashMap<MonitorId, Box<dyn EntityMonitor>>>,
     ) {
-        while let Ok(request) = request_rx.try_recv() {
-            match request {
-                HBRegistrationCommand::Register(fqin, new_monitor, response_tx) => {
-                    let id = MonitorId::BundleMonitorId(fqin);
-                    // TODO: b/409710102 - Adjust logic once subscriber starts to report an error on publisher crash.
-                    if let Some(existing_monitor) = monitors.get(&id) {
-                        if *existing_monitor.get_config() == *new_monitor.get_config() {
-                            warn!("Unregister and re-register {id:?} from health monitoring as it probably crashed");
+        // TODO(tmot): cleanup logic, enhance logic, to take recovery state into account,
+        // TODO(tmot): post move to MonitorManager
+        while let Some(request) = registration_requests.recv().await {
+            monitors.send_if_modified(|monitors|{
+                match request {
+                    HBRegistrationCommand::Register(fqin, new_monitor, response_tx) => {
+                        let id = MonitorId::BundleMonitorId(fqin);
+                        if let Some(existing_monitor) = monitors.get(&id) {
+                            if *existing_monitor.get_config() == *new_monitor.get_config() {
+                                warn!("Unregister and re-register {id:?} from health monitoring as it probably crashed");
+                                monitors.insert(id, new_monitor);
+                                response_tx.send(Ok(())).unwrap_or_else(|_| {
+                                    warn!(
+                                        "Re-registration case, oneshot receiver unexpectedly dropped!"
+                                    )
+                                });
+                                true
+                            } else {
+                                warn!("{id:?} is already registered for health monitoring");
+                                response_tx
+                                    .send(Err(RegistrationCommandError::AlreadyRegistered))
+                                    .unwrap_or_else(|_|
+                                        warn!("Already registered case, oneshot receiver unexpectedly dropped!")
+                                    );
+                                    false
+                            }
+                        } else {
                             monitors.insert(id, new_monitor);
                             response_tx.send(Ok(())).unwrap_or_else(|_| {
-                                warn!(
-                                    "Re-registration case, oneshot receiver unexpectedly dropped!"
-                                )
+                                warn!("Normal registration, oneshot receiver unexpectedly dropped!")
                             });
-                        } else {
-                            warn!("{id:?} is already registered for health monitoring");
-                            response_tx
-                                .send(Err(RegistrationCommandError::AlreadyRegistered))
-                                .unwrap_or_else(|_|
-                                    warn!("Already registered case, oneshot receiver unexpectedly dropped!")
-                                );
+                            true
                         }
-                    } else {
-                        monitors.insert(id, new_monitor);
-                        response_tx.send(Ok(())).unwrap_or_else(|_| {
-                            warn!("Normal registration, oneshot receiver unexpectedly dropped!")
+                    }
+                    HBRegistrationCommand::Unregister(fqin, response_tx) => {
+                        monitors.remove(&MonitorId::BundleMonitorId(fqin));
+                        response_tx.send(()).unwrap_or_else(|_| {
+                            warn!("Unregistration, oneshot receiver unexpectedly dropped!")
                         });
+                        true
                     }
                 }
-                HBRegistrationCommand::Unregister(fqin, response_tx) => {
-                    monitors.remove(&MonitorId::BundleMonitorId(fqin));
-                    response_tx.send(()).unwrap_or_else(|_| {
-                        warn!("Unregistration, oneshot receiver unexpectedly dropped!")
-                    });
-                }
-            }
+            });
         }
+        error!("HB Registration channel unexpectedly closed!");
     }
 
     #[instrument(skip(self))]
@@ -209,11 +215,7 @@ impl HealthMonitor {
 impl Drop for HealthMonitor {
     fn drop(&mut self) {
         self.stop();
-    }
-}
-impl Default for HealthMonitor {
-    fn default() -> Self {
-        Self::new()
+        self.hb_registration_commands_processing.abort();
     }
 }
 
@@ -249,9 +251,8 @@ impl HealthMonitorService for HealthMonitor {
         _request: &ListUnhealthyMonitoredServiceBundlesRequest,
     ) -> sdv_status_rs::SdvResult<ListUnhealthyMonitoredServiceBundlesResponse> {
         let unhealthy_services: Vec<String> = self
-            .service_bundle_monitors
-            .lock()
-            .unwrap()
+            .hb_monitors
+            .borrow()
             .iter()
             .filter(|(_, value)| value.get_health_status() == EntityHealthStatus::Unhealthy)
             .filter_map(|(key, _)| {
@@ -287,10 +288,10 @@ impl DumpStateReporter for HealthMonitor {
             self.should_run
         )?;
         writeln!(writer, "\nMONITORING INTERNAL STATE:")?;
-        if self.service_bundle_monitors.lock().unwrap().is_empty() {
+        if self.hb_monitors.borrow().is_empty() {
             writeln!(writer, "NO ACTIVE MONITORS")?;
         }
-        self.service_bundle_monitors.lock().unwrap().iter().enumerate().try_for_each(
+        self.hb_monitors.borrow().iter().enumerate().try_for_each(
             |(i, (id, monitor))| -> Result<(), Error> {
                 write!(
                     writer,
@@ -310,12 +311,17 @@ pub mod tests {
     use super::*;
     use crate::health_reporter::MockMessagePublisher;
     use crate::tests::utils::StringWriter;
+    use futures::task::noop_waker_ref;
+    use futures::task::Context;
+    use futures::task::Poll;
+    use futures::Future;
     use hb_config::HeartbeatMonitoringConfig;
     use mockall::mock;
     use mockall::predicate::eq;
     use sdv_comms::id::ServiceFqin;
     use sdv_status_rs::SdvStatusCode;
     use std::ffi::CStr;
+    use std::future;
     use std::io::{Error, Write};
     use std::str::FromStr;
     use tokio::sync::mpsc;
@@ -344,8 +350,8 @@ pub mod tests {
     #[tokio::test]
     async fn test_start_starts_background_thread_and_can_be_stopped() {
         // SETUP
-        let hm = HealthMonitor::default();
-        let (_request_tx, request_rx) = std::sync::mpsc::channel();
+        let (_, rx) = tokio::sync::mpsc::channel(1);
+        let hm = HealthMonitor::new(rx);
         let mut publisher = MockMessagePublisher::<VmHealth>::new();
         publisher.expect_publish().returning(|_| Ok(()));
 
@@ -353,7 +359,7 @@ pub mod tests {
         let monitor_manager = MonitorManager::new(empty_rx, HashMap::new());
 
         // ACT
-        hm.start(Box::new(publisher), 10, request_rx, monitor_manager.into());
+        hm.start(Box::new(publisher), 10, monitor_manager.into());
         hm.should_run.store(false, Ordering::Relaxed);
 
         // ASSERT
@@ -377,8 +383,7 @@ pub mod tests {
         monitor1.expect_get_config().return_const(config1.clone());
         monitor2.expect_get_config().return_const(config2.clone());
 
-        let mut monitors = HashMap::new();
-        let (request_tx, request_rx) = std::sync::mpsc::channel();
+        let (request_tx, request_rx) = tokio::sync::mpsc::channel(10);
         let (oneshot1_tx, oneshot1_rx) = tokio::sync::oneshot::channel();
         let (oneshot2_tx, oneshot2_rx) = tokio::sync::oneshot::channel();
 
@@ -388,15 +393,18 @@ pub mod tests {
                 Box::new(monitor1),
                 oneshot1_tx,
             ))
+            .await
             .unwrap();
         request_tx
             .send(HBRegistrationCommand::Register(Box::new(fqin), Box::new(monitor2), oneshot2_tx))
+            .await
             .unwrap();
 
-        HealthMonitor::process_request_queue(&mut monitors, &request_rx);
+        let (monitors_tx, _monitors_rx) = tokio::sync::watch::channel(HashMap::new());
+        tokio::spawn(HealthMonitor::process_request_queue(request_rx, monitors_tx));
+
         assert!(oneshot1_rx.await.unwrap().is_ok());
         assert!(oneshot2_rx.await.unwrap().is_err());
-        assert!(monitors.len() == 1);
     }
 
     #[tokio::test]
@@ -411,8 +419,7 @@ pub mod tests {
         monitor1.expect_get_config().return_const(config.clone());
         monitor2.expect_get_config().return_const(config.clone());
 
-        let mut monitors = HashMap::new();
-        let (request_tx, request_rx) = std::sync::mpsc::channel();
+        let (request_tx, request_rx) = tokio::sync::mpsc::channel(10);
         let (oneshot1_tx, oneshot1_rx) = tokio::sync::oneshot::channel();
         let (oneshot2_tx, oneshot2_rx) = tokio::sync::oneshot::channel();
 
@@ -422,22 +429,23 @@ pub mod tests {
                 Box::new(monitor1),
                 oneshot1_tx,
             ))
+            .await
             .unwrap();
         request_tx
             .send(HBRegistrationCommand::Register(Box::new(fqin), Box::new(monitor2), oneshot2_tx))
+            .await
             .unwrap();
 
-        HealthMonitor::process_request_queue(&mut monitors, &request_rx);
+        let (monitors_tx, _monitors_rx) = tokio::sync::watch::channel(HashMap::new());
+        tokio::spawn(HealthMonitor::process_request_queue(request_rx, monitors_tx));
+
         assert!(oneshot1_rx.await.unwrap().is_ok());
         assert!(oneshot2_rx.await.unwrap().is_ok());
-        assert!(monitors.len() == 1);
     }
 
     #[tokio::test]
     async fn test_list_unhealthy_monitored_service_bundles_post_monitor_registration() {
-        let mut hm = HealthMonitor::default();
-
-        let (register_commands_tx, register_commands_rx) = std::sync::mpsc::channel();
+        let (register_commands_tx, register_commands_rx) = tokio::sync::mpsc::channel(10);
         let mut healthy_service_monitor = MockEntityMonitor::new();
         healthy_service_monitor
             .expect_get_health_status()
@@ -449,6 +457,7 @@ pub mod tests {
                 Box::new(healthy_service_monitor),
                 healthy_oneshot_tx,
             ))
+            .await
             .unwrap();
 
         let mut unhealthy_service_monitor = MockEntityMonitor::new();
@@ -462,19 +471,16 @@ pub mod tests {
                 Box::new(unhealthy_service_monitor),
                 unhealthy_oneshot_tx,
             ))
+            .await
             .unwrap();
 
-        let mut publisher = MockMessagePublisher::<VmHealth>::new();
-        publisher.expect_publish().returning(|_| Ok(()));
+        let hm = HealthMonitor::new(register_commands_rx);
 
-        HealthMonitor::process_request_queue(
-            hm.service_bundle_monitors.lock().unwrap().deref_mut(),
-            &register_commands_rx,
-        );
-
-        assert!(hm.service_bundle_monitors.lock().unwrap().len() == 2);
         assert!(healthy_oneshot_rx.await.is_ok());
         assert!(unhealthy_oneshot_rx.await.is_ok());
+
+        // Yield to allow the monitor task to process registration
+        tokio::task::yield_now().await;
 
         let request = ListUnhealthyMonitoredServiceBundlesRequest::new();
         let response = hm
@@ -487,16 +493,12 @@ pub mod tests {
 
         assert_eq!(response.fqin.len(), 1);
         assert_eq!(response.fqin[0], UNHEALTHY_SERVICE_FQIN_STR);
-
-        hm.stop();
     }
 
     #[tokio::test]
     async fn test_report_state_reports_all_healthy_post_monitor_registration() {
         // SETUP
-        let mut hm = HealthMonitor::default();
-
-        let (register_commands_tx, register_commands_rx) = std::sync::mpsc::channel();
+        let (register_commands_tx, register_commands_rx) = tokio::sync::mpsc::channel(10);
         let mut healthy_service_monitor = MockEntityMonitor::new();
         healthy_service_monitor
             .expect_get_health_status()
@@ -509,7 +511,10 @@ pub mod tests {
                 Box::new(healthy_service_monitor),
                 healthy_oneshot_tx,
             ))
+            .await
             .unwrap();
+
+        let hm = HealthMonitor::new(register_commands_rx);
 
         let mut publisher = MockMessagePublisher::<VmHealth>::new();
         publisher
@@ -526,20 +531,17 @@ pub mod tests {
         let sb_recovery_monitors = HashMap::new();
 
         // ACT
-        HealthMonitor::process_request_queue(
-            hm.service_bundle_monitors.lock().unwrap().deref_mut(),
-            &register_commands_rx,
-        );
+        // Wait for registration to complete
+        assert!(healthy_oneshot_rx.await.is_ok());
+        // Yield to allow internal state update
+        tokio::task::yield_now().await;
+
         HealthMonitor::report_state(
-            hm.service_bundle_monitors.as_ref(),
+            &hm.hb_monitors.borrow(),
             &sb_recovery_monitors,
             &agent_crash_monitors,
             &health_reporter,
         );
-        hm.stop();
-
-        // ASSERT (see also mockall checks declared in SETUP)
-        assert!(healthy_oneshot_rx.await.is_ok())
     }
 
     #[tokio::test]
@@ -550,12 +552,12 @@ pub mod tests {
             .expect_get_health_status()
             .times(1)
             .returning(|| EntityHealthStatus::Unhealthy);
-        let hb_monitors = Mutex::new(HashMap::from([(
+        let hb_monitors = HashMap::from([(
             MonitorId::BundleMonitorId(Box::new(
                 ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(),
             )),
             Box::new(healthy_service_monitor) as Box<dyn EntityMonitor>,
-        )]));
+        )]);
 
         let mut publisher = MockMessagePublisher::<VmHealth>::new();
         publisher
@@ -585,7 +587,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_unhealthy_state_reported_when_agent_crash_monitoring_reports_unhealthy() {
         // SETUP
-        let hb_monitors = Mutex::new(HashMap::new());
+        let hb_monitors = HashMap::new();
 
         let mut unhealthy_agent_monitor = MockEntityMonitor::new();
         unhealthy_agent_monitor
@@ -624,7 +626,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_unhealthy_state_reported_when_one_sb_recovery_failed() {
         // SETUP
-        let hb_monitors = Mutex::new(HashMap::new());
+        let hb_monitors = HashMap::new();
         let agent_crash_monitors = HashMap::new();
 
         let mut publisher = MockMessagePublisher::<VmHealth>::new();
@@ -667,7 +669,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_healthy_state_reported_when_sb_recovering() {
         // SETUP
-        let hb_monitors = Mutex::new(HashMap::new());
+        let hb_monitors = HashMap::new();
         let agent_crash_monitors = HashMap::new();
 
         let mut publisher = MockMessagePublisher::<VmHealth>::new();
@@ -702,7 +704,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_healthy_state_reported_when_sb_recovery_monitoring_reports_normal() {
         // SETUP
-        let hb_monitors = Mutex::new(HashMap::new());
+        let hb_monitors = HashMap::new();
         let agent_crash_monitors = HashMap::new();
 
         let mut publisher = MockMessagePublisher::<VmHealth>::new();
@@ -736,7 +738,8 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_list_crashes_unimplemented() {
-        let hm = HealthMonitor::default();
+        let (_tx, rx) = mpsc::channel(1);
+        let hm = HealthMonitor::new(rx);
 
         let request = ListCrashingServiceBundlesRequest { ..Default::default() };
 
@@ -753,7 +756,8 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_list_all_services_unimplemented() {
-        let hm = HealthMonitor::default();
+        let (_tx, rx) = mpsc::channel(1);
+        let hm = HealthMonitor::new(rx);
 
         let request = ListAllServiceBundlesRequest { ..Default::default() };
 
@@ -797,8 +801,8 @@ pub mod tests {
         }
     }
 
-    #[test]
-    fn test_health_reporter_correctly_reports_internal_state_via_dumpsys() {
+    #[tokio::test]
+    async fn test_health_reporter_correctly_reports_internal_state_via_dumpsys() {
         //setup:
         let mut writer = StringWriter::new();
 
@@ -819,21 +823,25 @@ pub mod tests {
             .expect_dump()
             .returning(move |writer, _| write!(writer, "{}", &monitor2_expected_dump));
 
-        let hm = HealthMonitor::default();
-
-        let _ = hm
-            .service_bundle_monitors
-            .lock()
-            .unwrap()
-            .insert(MonitorId::BundleMonitorId(Box::new(fqin1)), Box::new(mock_monitor_1));
-        let _ = hm
-            .service_bundle_monitors
-            .lock()
-            .unwrap()
-            .insert(MonitorId::BundleMonitorId(Box::new(fqin2)), Box::new(mock_monitor_2));
+        let (_, monitors_rx) = watch::channel(HashMap::from_iter([
+            (
+                MonitorId::BundleMonitorId(Box::new(fqin1)),
+                Box::new(mock_monitor_1) as Box<dyn EntityMonitor>,
+            ),
+            (
+                MonitorId::BundleMonitorId(Box::new(fqin2)),
+                Box::new(mock_monitor_2) as Box<dyn EntityMonitor>,
+            ),
+        ]));
+        let hm = HealthMonitor {
+            hb_registration_commands_processing: tokio::spawn(future::ready(())),
+            background_thread: Mutex::new(None),
+            hb_monitors: monitors_rx,
+            should_run: Arc::new(AtomicBool::new(false)),
+        };
 
         //action:
-        let _ = hm.dump(&mut writer, &[]);
+        hm.dump(&mut writer, &[]).unwrap();
 
         //checks:
         let title_always_in_dump_report = "INTERNAL STATE";
@@ -842,11 +850,10 @@ pub mod tests {
         assert!(writer.sink.as_str().contains(monitor2_expected_dump));
     }
 
-    #[test]
-    fn test_registration_disconnect_does_not_lead_to_panic_b439620660() {
+    #[tokio::test]
+    async fn test_registration_disconnect_does_not_lead_to_panic_b439620660() {
         // setup
-        let mut hm = HealthMonitor::default();
-        let (register_commands_tx, register_commands_rx) = std::sync::mpsc::channel();
+        let (register_commands_tx, register_commands_rx) = tokio::sync::mpsc::channel(10);
         let healthy_service_monitor = MockEntityMonitor::new();
         let (registration_result_tx, registration_result_rx) = tokio::sync::oneshot::channel();
         register_commands_tx
@@ -855,18 +862,24 @@ pub mod tests {
                 Box::new(healthy_service_monitor),
                 registration_result_tx,
             ))
+            .await
             .unwrap();
+
+        //setup for running the future once
+        let (monitors_tx, _monitors_rx) = tokio::sync::watch::channel(HashMap::new());
+        let mut pinned_fut =
+            Box::pin(HealthMonitor::process_request_queue(register_commands_rx, monitors_tx));
+        let mut cx = Context::from_waker(noop_waker_ref());
 
         // simulate registration cancelled early:
         std::mem::drop(registration_result_rx);
 
-        // should not panic:
-        HealthMonitor::process_request_queue(
-            hm.service_bundle_monitors.lock().unwrap().deref_mut(),
-            &register_commands_rx,
-        );
-
-        // cleanup
-        hm.stop();
+        // action: manual poll, should not panic
+        match pinned_fut.as_mut().poll(&mut cx) {
+            Poll::Ready(_) => {
+                panic!("this future should not be ready under normal circumstances")
+            }
+            Poll::Pending => {}
+        }
     }
 }

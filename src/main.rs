@@ -38,8 +38,8 @@ use sdv_mw_rs_com_sdv_google_health_health_monitor_service_bundle::{
 };
 use sdv_mw_rs_sdv_comms::SdvComms;
 use std::future;
-use std::sync::mpsc::Receiver;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tracing::{event, info_span, Level};
 static LOG_TAG: &str = "sdv_hm";
 
@@ -66,16 +66,21 @@ async fn main() -> anyhow::Result<()> {
     let power_state_receiver_factory: Arc<dyn PowerStateReceiverFactory> =
         Arc::new(PowerStateReceiverFactoryImpl::new());
 
-    let hm = Arc::new(HealthMonitor::new());
-    dm.add_reporter("Health monitor", &hm);
-
     let agent_monitors = create_agent_monitor_entries(
         config.monitored_binders,
         power_state_receiver_factory.as_ref(),
     );
 
-    let (_mw, bundle_command_receiver, vm_health_publisher) =
-        setup_communication(hm.clone(), &dm, power_state_receiver_factory).await?;
+    let (hb_registration_commands_tx, hb_registration_commands_rx) = mpsc::channel(100);
+    let hm = Arc::new(HealthMonitor::new(hb_registration_commands_rx));
+    dm.add_reporter("Health monitor", &hm);
+    let (_mw, vm_health_publisher) = setup_communication(
+        hm.clone(),
+        &dm,
+        hb_registration_commands_tx,
+        power_state_receiver_factory,
+    )
+    .await?;
     dm.set_agent_state("VM Health Reports publisher created");
 
     let (_sb_recovery_source, sb_recovery_events) = SbRecoveryEventSourceImpl::setup();
@@ -83,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
     let monitor_manager = Arc::new(monitor_manager);
     dm.add_reporter("Recovery monitor manager", &monitor_manager);
 
-    hm.start(vm_health_publisher, config.period_ms, bundle_command_receiver, monitor_manager);
+    hm.start(vm_health_publisher, config.period_ms, monitor_manager);
     dm.set_agent_state("Started");
 
     info!("Started VM Health Monitor");
@@ -95,32 +100,13 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Sets up the IPC infrastructure for the Health Monitor agent. Specifically:
-///
-/// 1.  **Establishes Identity**: It creates a communication context and determines the
-///     Fully Qualified Instance Name (FQIN) for the Health Monitor service. This FQIN
-///     is also reported to the `DumpManager` for diagnostic purposes.
-/// 2.  **Configures Bundle Registration**: It creates a `ServiceBundleRegistrationInterface`.
-///     This interface allows other services (bundles) to register with the Health Monitor,
-///     to have their heartbeats monitored. It uses a `HeartbeatMonitorFactory`
-///     to create monitors for registered bundles and a MPSC channel (`RegistrationCommand`)
-///     to receive registration requests.
-/// 3.  **Creates Middleware Bundle**: It instantiates a `HealthMonitorServiceBundle`,
-///     which encapsulates the communication logic, the bundle registration interface,
-///     and the provided `hm_status_query_interface` (allowing external queries about
-///     the health monitor's status).
-/// 4.  **Acquires VmHealth Publisher**: It extracts a `MessagePublisher` from the
-///     middleware bundle, specifically for publishing `VmHealth` messages, which
-///     represent the overall health status of the VM.
+// TODO(tmot): simplify/remove, once HealthMonitorService logic is decoupled from hb monitor holder
 async fn setup_communication(
     hm_status_query_interface: Arc<dyn HealthMonitorService>,
     dm: &DumpManager,
+    registration_commands_tx: mpsc::Sender<HBRegistrationCommand>,
     power_state_receiver_factory: Arc<dyn PowerStateReceiverFactory>,
-) -> anyhow::Result<(
-    HealthMonitorServiceBundle,
-    Receiver<HBRegistrationCommand>,
-    Box<dyn MessagePublisher<VmHealth>>,
-)> {
+) -> anyhow::Result<(HealthMonitorServiceBundle, Box<dyn MessagePublisher<VmHealth>>)> {
     let context = create_context()?;
     let id = context.get_self_fqin();
     dm.set_self_fqin(&id);
@@ -130,7 +116,6 @@ async fn setup_communication(
     let sd = Arc::new(ServiceDiscoveryManager::new(context));
     let heartbeat_monitor_factory =
         Box::new(HeartbeatMonitorFactoryImpl::new(comms.clone(), sd, power_state_receiver_factory));
-    let (registration_commands_tx, r) = std::sync::mpsc::channel::<HBRegistrationCommand>();
     let mut mw = HealthMonitorServiceBundle::new(
         comms,
         (
@@ -149,7 +134,7 @@ async fn setup_communication(
         .take_publisher(publisher::Variant::<VmHealth>::UNIQUE)
         .ok_or_else(|| anyhow!("Could not take publisher from mw"))?;
     create_pub_span.exit();
-    Ok((mw, r, Box::new(publisher)))
+    Ok((mw, Box::new(publisher)))
 }
 
 fn create_context() -> anyhow::Result<ContextRef> {
