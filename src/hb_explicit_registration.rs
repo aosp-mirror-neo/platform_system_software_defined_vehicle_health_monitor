@@ -28,13 +28,21 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tracing::instrument;
 
-pub enum HBRegistrationCommand {
-    Register(
-        ServiceFqin,
+#[derive(Debug)]
+pub enum HBRegistrationAction {
+    RegisterImplicitly(HeartbeatMonitoringConfig),
+    RegisterExplicitly(
         HeartbeatMonitoringConfig,
         oneshot::Sender<Result<(), RegistrationCommandError>>,
     ),
-    Unregister(ServiceFqin, oneshot::Sender<()>),
+    UnregisterImplicitly,
+    UnregisterExplicitly(oneshot::Sender<()>),
+}
+
+#[derive(Debug)]
+pub struct HBRegistrationCommand {
+    pub(crate) fqin: ServiceFqin,
+    pub(crate) action: HBRegistrationAction,
 }
 
 #[derive(Debug)]
@@ -81,7 +89,7 @@ impl HealthMonitorRegistrationService for HBRegistrationListener {
                 return Err(SdvStatus::with_message(
                     SdvStatusCode::InvalidArgument,
                     "config parameter cannot be None",
-                ))
+                ));
             }
         };
         let config = HeartbeatMonitoringConfig::try_from(config)
@@ -90,7 +98,10 @@ impl HealthMonitorRegistrationService for HBRegistrationListener {
         info!("Queueing up register for fqin:{}", fqin);
         let (tx, rx) = oneshot::channel();
         self.registration_commands_tx
-            .send(HBRegistrationCommand::Register(fqin, config, tx))
+            .send(HBRegistrationCommand {
+                fqin,
+                action: HBRegistrationAction::RegisterExplicitly(config, tx),
+            })
             .await
             .or(Err(SdvStatus::with_message(
                 SdvStatusCode::Unknown,
@@ -119,7 +130,10 @@ impl HealthMonitorRegistrationService for HBRegistrationListener {
         info!("Queueing up unregister for fqin:{}", fqin);
         let (tx, rx) = oneshot::channel();
         self.registration_commands_tx
-            .send(HBRegistrationCommand::Unregister(fqin, tx))
+            .send(HBRegistrationCommand {
+                fqin,
+                action: HBRegistrationAction::UnregisterExplicitly(tx),
+            })
             .await
             .map_err(|_| {
                 let err = "Could not send deregistration command, queue dropped!";
@@ -187,15 +201,22 @@ mod tests {
         });
         let monitor_task = tokio::task::spawn(async move {
             match command_rx.recv().await.unwrap() {
-                HBRegistrationCommand::Register(fqin, m, oneshot_tx) => {
+                HBRegistrationCommand {
+                    fqin,
+                    action: HBRegistrationAction::RegisterExplicitly(config, oneshot_tx),
+                } => {
                     assert_eq!(fqin.to_string(), HEALTHY_SERVICE_FQIN_STR);
-                    assert_eq!(m, valid_parsed_config);
+                    assert_eq!(config, valid_parsed_config);
 
                     oneshot_tx.send(Ok(())).unwrap();
                 }
-                HBRegistrationCommand::Unregister(_, _) => {
+                HBRegistrationCommand {
+                    fqin: _,
+                    action: HBRegistrationAction::UnregisterExplicitly(_),
+                } => {
                     panic!("Unregister command not currently under test")
                 }
+                _ => panic!("Unexpected command type"),
             }
         });
         monitor_task.await.unwrap();
@@ -227,12 +248,19 @@ mod tests {
         });
         let monitor_task = tokio::task::spawn(async move {
             match command_rx.recv().await.unwrap() {
-                HBRegistrationCommand::Register(_, _, oneshot_tx) => {
+                HBRegistrationCommand {
+                    fqin: _,
+                    action: HBRegistrationAction::RegisterExplicitly(_, oneshot_tx),
+                } => {
                     oneshot_tx.send(Err(RegistrationCommandError::AlreadyRegistered)).unwrap();
                 }
-                HBRegistrationCommand::Unregister(_, _) => {
+                HBRegistrationCommand {
+                    fqin: _,
+                    action: HBRegistrationAction::UnregisterExplicitly(_),
+                } => {
                     panic!("Unregister command not currently under test")
                 }
+                _ => panic!("Unexpected command type"),
             }
         });
         monitor_task.await.unwrap();
@@ -320,12 +348,19 @@ mod tests {
 
         let monitor_task = tokio::task::spawn(async move {
             match command_rx.recv().await.unwrap() {
-                HBRegistrationCommand::Register(_, _, _) => {
+                HBRegistrationCommand {
+                    fqin: _,
+                    action: HBRegistrationAction::RegisterExplicitly(_, _),
+                } => {
                     panic!("Register command not currently under test")
                 }
-                HBRegistrationCommand::Unregister(_, oneshot_tx) => {
+                HBRegistrationCommand {
+                    fqin: _,
+                    action: HBRegistrationAction::UnregisterExplicitly(oneshot_tx),
+                } => {
                     oneshot_tx.send(()).unwrap();
                 }
+                _ => panic!("Unexpected command type"),
             }
         });
 

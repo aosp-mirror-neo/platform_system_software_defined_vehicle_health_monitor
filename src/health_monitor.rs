@@ -18,7 +18,7 @@ use crate::monitor_manager::MonitorManager;
 use crate::monitor_model::AgentName;
 use crate::monitor_model::EntityHealthStatus;
 use crate::monitor_model::EntityMonitor;
-use crate::monitor_model::SBRecoveryState;
+use crate::sb_recovery_monitor::SBRecoveryMonitor;
 use async_trait::async_trait;
 use authorization::AuthorizationImpl;
 pub use com_sdv_google_health_health_monitor_service_rpc::Interface as HealthMonitorService;
@@ -58,12 +58,14 @@ pub mod hb_explicit_registration;
 pub mod hb_monitor;
 pub mod hb_monitor_factory;
 mod health_reporter;
-mod implicit_monitoring_db;
+pub mod implicit_monitoring_db;
 pub mod monitor_manager;
 pub mod monitor_model;
 pub mod power_state;
 pub mod read_sys_prop;
 pub mod sb_recovery_listener;
+mod sb_recovery_monitor;
+mod utils;
 pub mod vm_config;
 
 pub struct HealthMonitor {
@@ -114,7 +116,7 @@ impl HealthMonitor {
 
     fn report_state(
         heartbeat_monitors: &HashMap<ServiceFqin, Box<dyn EntityMonitor>>,
-        sb_recovery_monitors: &HashMap<ServiceFqin, SBRecoveryState>,
+        sb_recovery_state_monitors: &HashMap<ServiceFqin, SBRecoveryMonitor>,
         agent_crash_monitors: &HashMap<AgentName, Box<dyn EntityMonitor>>,
         health_reporter: &HealthReporter,
     ) {
@@ -125,7 +127,7 @@ impl HealthMonitor {
         let agent_recoveries_failed = agent_crash_monitors
             .values()
             .any(|m| m.get_health_status() == EntityHealthStatus::Unhealthy);
-        let sb_recoveries_failed = sb_recovery_monitors
+        let sb_recoveries_failed = sb_recovery_state_monitors
             .values()
             .any(|m| m.get_health_status() == EntityHealthStatus::Unhealthy);
 
@@ -161,7 +163,8 @@ impl HealthMonitorService for HealthMonitor {
     ) -> sdv_status_rs::SdvResult<ListAllServiceBundlesResponse> {
         Err(sdv_status_rs::SdvStatus::with_message(
             sdv_status_rs::SdvStatusCode::Unimplemented,
-            "Health Monitor doesn't support ListAllServiceBundles, it will be implemented in future"))
+            "Health Monitor doesn't support ListAllServiceBundles, it will be implemented in future",
+        ))
     }
 
     #[instrument(skip(self))]
@@ -172,7 +175,8 @@ impl HealthMonitorService for HealthMonitor {
     ) -> sdv_status_rs::SdvResult<ListCrashingServiceBundlesResponse> {
         Err(sdv_status_rs::SdvStatus::with_message(
             sdv_status_rs::SdvStatusCode::Unimplemented,
-            "Health Monitor doesn't support ListCrashingServiceBundles, it will be implemented in future"))
+            "Health Monitor doesn't support ListCrashingServiceBundles, it will be implemented in future",
+        ))
     }
 
     #[instrument(skip(self))]
@@ -225,7 +229,9 @@ pub mod tests {
     use super::*;
     use crate::hb_monitor_factory::MockHeartbeatMonitorFactory;
     use crate::health_reporter::MockMessagePublisher;
+    use crate::implicit_monitoring_db::ImplicitMonitoringConfigRepo;
     use crate::monitor_model::test_utils::TestMonitor;
+    use crate::sb_recovery_monitor::{SBLifecycleState, SBOrchestrationState, SBRecoveryState};
     use crate::tests::utils::StringWriter;
     use mockall::predicate::eq;
     use sdv_comms::id::ServiceFqin;
@@ -240,10 +246,12 @@ pub mod tests {
     async fn test_start_starts_background_thread_and_can_be_stopped() {
         // SETUP
         let hm = {
-            let (_, hb_registration_commands) = mpsc::channel(1);
+            let (hb_registration_commands_sink, hb_registration_commands) = mpsc::channel(1);
             let (_, hb_recovery_events) = mpsc::channel(1);
             let monitor_manager = MonitorManager::new(
+                ImplicitMonitoringConfigRepo::new(),
                 hb_registration_commands,
+                hb_registration_commands_sink,
                 hb_recovery_events,
                 HashMap::new(),
                 MockHeartbeatMonitorFactory::new(),
@@ -358,9 +366,18 @@ pub mod tests {
         let sb_recovery_monitors = HashMap::from([
             (
                 ServiceFqin::from_str(UNHEALTHY_SERVICE_FQIN_STR).unwrap(),
-                SBRecoveryState::FailedRecovery,
+                SBOrchestrationState {
+                    recovery_state: SBRecoveryState::FailedRecovery,
+                    lifecycle_state: SBLifecycleState::Created,
+                },
             ),
-            (ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(), SBRecoveryState::Normal),
+            (
+                ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(),
+                SBOrchestrationState {
+                    recovery_state: SBRecoveryState::Normal,
+                    lifecycle_state: SBLifecycleState::Created,
+                },
+            ),
         ]);
 
         // ACT
@@ -393,7 +410,10 @@ pub mod tests {
 
         let sb_recovery_monitors = HashMap::from([(
             ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(),
-            SBRecoveryState::Recovering,
+            SBOrchestrationState {
+                recovery_state: SBRecoveryState::Recovering,
+                lifecycle_state: SBLifecycleState::Created,
+            },
         )]);
 
         // ACT
@@ -426,7 +446,10 @@ pub mod tests {
 
         let sb_recovery_monitors = HashMap::from([(
             ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(),
-            SBRecoveryState::Normal,
+            SBOrchestrationState {
+                recovery_state: SBRecoveryState::Normal,
+                lifecycle_state: SBLifecycleState::Created,
+            },
         )]);
 
         // ACT
@@ -443,10 +466,12 @@ pub mod tests {
     #[tokio::test]
     async fn test_list_crashes_unimplemented() {
         let hm = {
-            let (_, hb_registration_commands) = mpsc::channel(1);
+            let (hb_registration_commands_sink, hb_registration_commands) = mpsc::channel(1);
             let (_, hb_recovery_events) = mpsc::channel(1);
             let monitor_manager = MonitorManager::new(
+                ImplicitMonitoringConfigRepo::new(),
                 hb_registration_commands,
+                hb_registration_commands_sink,
                 hb_recovery_events,
                 HashMap::new(),
                 MockHeartbeatMonitorFactory::new(),
@@ -471,10 +496,12 @@ pub mod tests {
     #[tokio::test]
     async fn test_list_all_services_unimplemented() {
         let hm = {
-            let (_, hb_registration_commands) = mpsc::channel(1);
+            let (hb_registration_commands_sink, hb_registration_commands) = mpsc::channel(1);
             let (_, hb_recovery_events) = mpsc::channel(1);
             let monitor_manager = MonitorManager::new(
+                ImplicitMonitoringConfigRepo::new(),
                 hb_registration_commands,
+                hb_registration_commands_sink,
                 hb_recovery_events,
                 HashMap::new(),
                 MockHeartbeatMonitorFactory::new(),
@@ -529,10 +556,12 @@ pub mod tests {
     async fn test_health_monitor_dumpsys_reporting() {
         //setup:
         let hm = {
-            let (_, hb_registration_commands) = mpsc::channel(1);
+            let (hb_registration_commands_sink, hb_registration_commands) = mpsc::channel(1);
             let (_, hb_recovery_events) = mpsc::channel(1);
             let monitor_manager = MonitorManager::new(
+                ImplicitMonitoringConfigRepo::new(),
                 hb_registration_commands,
+                hb_registration_commands_sink,
                 hb_recovery_events,
                 HashMap::new(),
                 MockHeartbeatMonitorFactory::new(),

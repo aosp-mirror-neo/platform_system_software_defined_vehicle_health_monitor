@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
-
+use crate::hb_config::HeartbeatMonitoringConfig;
 use binder::Strong;
 use google_sdv_service_bundles_registry::aidl::google::sdv::service_bundles_registry::IRegistry::{
     BpRegistry, IRegistry,
 };
 use google_sdv_service_bundles_registry::aidl::google::sdv::service_bundles_registry::ServiceBundleMetadata::ServiceBundleMetadata;
-use health_api::health_config::HealthConfiguration;
 use health_api::health_config::ServiceBundleHealthConfiguration;
 use log::{error, info, warn};
 use protobuf::text_format::parse_from_str;
@@ -31,13 +29,13 @@ use std::io::Read;
 use std::time::Duration;
 use tokio::sync::OnceCell;
 
-struct ImplicitMonitoringConfigRepo(OnceCell<HashMap<ServiceFqin, HealthConfiguration>>);
+pub struct ImplicitMonitoringConfigRepo(OnceCell<HashMap<ServiceFqin, HeartbeatMonitoringConfig>>);
 
 impl ImplicitMonitoringConfigRepo {
-    async fn get_sb_instance_config<'a>(
-        &'a self,
+    pub async fn get_sb_instance_config(
+        &self,
         fqin: &ServiceFqin,
-    ) -> SdvResult<Option<&'a HealthConfiguration>> {
+    ) -> SdvResult<Option<HeartbeatMonitoringConfig>> {
         Ok(self
             .0
             .get_or_try_init(|| async {
@@ -47,18 +45,24 @@ impl ImplicitMonitoringConfigRepo {
                 .await
                 .map_err(|e| {
                     SdvStatus::with_message(SdvStatusCode::Internal, format!("JoinError: {e}"))
-                })?
+                })
             })
             .await?
-            .get(fqin))
+            .get(fqin)
+            .copied())
+    }
+
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        ImplicitMonitoringConfigRepo(OnceCell::default())
     }
 }
 
 /// NOTE: might block thread. Use separate run_blocking
 fn retrieve_implicit_health_config_from_sbr(
     get_bundle_metadata: impl FnOnce() -> Vec<ServiceBundleMetadata>,
-) -> SdvResult<HashMap<ServiceFqin, HealthConfiguration>> {
-    Ok(get_bundle_metadata()
+) -> HashMap<ServiceFqin, HeartbeatMonitoringConfig> {
+    get_bundle_metadata()
         .into_iter()
         .filter_map(|metadata| {
             if let Some(path) = metadata.healthConfigPath {
@@ -95,10 +99,10 @@ fn retrieve_implicit_health_config_from_sbr(
                 None
             }
         })
-        .collect())
+        .collect()
 }
 
-fn parse_bundle_health_config(path: &str) -> SdvResult<HashMap<String, HealthConfiguration>> {
+fn parse_bundle_health_config(path: &str) -> SdvResult<HashMap<String, HeartbeatMonitoringConfig>> {
     let mut file = File::open(path).map_err(|e| {
         SdvStatus::with_message(SdvStatusCode::Internal, format!("File open error: {e}"))
     })?;
@@ -106,14 +110,24 @@ fn parse_bundle_health_config(path: &str) -> SdvResult<HashMap<String, HealthCon
     file.read_to_string(&mut textproto).map_err(|e| {
         SdvStatus::with_message(SdvStatusCode::Internal, format!("File read error: {e}"))
     })?;
-    let health_config =
-        parse_from_str::<ServiceBundleHealthConfiguration>(&textproto).map_err(|e| {
+
+    let map = parse_from_str::<ServiceBundleHealthConfiguration>(&textproto)
+        .map_err(|e| {
             SdvStatus::with_message(
                 SdvStatusCode::InvalidArgument,
                 format!("Proto parse error: {e}"),
             )
-        })?;
-    Ok(health_config.instance_config)
+        })?
+        .instance_config
+        .into_iter()
+        .filter_map(|(k, conf)| Some((k, HeartbeatMonitoringConfig::try_from(conf).ok()?)))
+        .collect::<HashMap<_, _>>();
+
+    if !map.is_empty() {
+        Ok(map)
+    } else {
+        Err(SdvStatus::new(SdvStatusCode::NotFound))
+    }
 }
 
 const SBR_RETRY_COOLDOWN: Duration = Duration::from_secs(3);
@@ -156,9 +170,19 @@ fn retry_forever_until_ok<T>(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use anyhow::anyhow;
+
+    pub mod utils {
+        use super::*;
+
+        impl ImplicitMonitoringConfigRepo {
+            pub fn new_for_testing(inner: HashMap<ServiceFqin, HeartbeatMonitoringConfig>) -> Self {
+                Self(OnceCell::new_with(Some(inner)))
+            }
+        }
+    }
 
     #[tokio::test]
     async fn test_retrieve_config_success_when_config_exists() {
@@ -172,7 +196,7 @@ mod tests {
 
         let db = ImplicitMonitoringConfigRepo(OnceCell::new_with(Some(HashMap::from([(
             fqin.clone(),
-            HealthConfiguration::default(),
+            HeartbeatMonitoringConfig::default(),
         )]))));
 
         assert!(db.get_sb_instance_config(&fqin).await.unwrap().is_some())
@@ -307,7 +331,6 @@ mod tests {
         let config_db = retrieve_implicit_health_config_from_sbr(move || metadata);
 
         // ASSERT
-        let config_db = config_db.unwrap();
         assert!(config_db.contains_key(&fqin1));
         assert!(config_db.contains_key(&fqin2));
         assert!(config_db.contains_key(&fqin3));

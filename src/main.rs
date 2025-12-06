@@ -22,6 +22,7 @@ use sdv_comms::{id::ServiceFqin, ContextRef};
 use sdv_dump::DumpBinderConnection;
 use sdv_health_monitor::agent_monitor::create_agent_monitor_entries;
 use sdv_health_monitor::hb_explicit_registration::HBRegistrationListener;
+use sdv_health_monitor::implicit_monitoring_db::ImplicitMonitoringConfigRepo;
 use sdv_health_monitor::monitor_manager::MonitorManager;
 use sdv_health_monitor::power_state::PowerStateReceiverFactory;
 use sdv_health_monitor::power_state::PowerStateReceiverFactoryImpl;
@@ -80,7 +81,9 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(PowerStateReceiverFactoryImpl::new()),
     );
     let monitor_manager = MonitorManager::new(
+        ImplicitMonitoringConfigRepo::new(),
         hb_registration_commands_rx,
+        hb_registration_commands_tx.clone(), // mpsc, cheap clone
         sb_recovery_events,
         agent_monitors,
         hb_monitor_factory,

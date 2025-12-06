@@ -30,40 +30,6 @@ pub trait EntityMonitor: DumpStateReporter {
 pub type AgentBinderId = String;
 pub type AgentName = String;
 
-// TODO: keep struct at least until Orch implements all instance states
-#[derive(Clone, Debug, PartialEq)]
-pub enum SBRecoveryState {
-    Normal,
-    Recovering,
-    FailedRecovery,
-    TerminatedClean,
-}
-
-impl EntityMonitor for SBRecoveryState {
-    fn get_health_status(&self) -> EntityHealthStatus {
-        match self {
-            SBRecoveryState::Normal => EntityHealthStatus::Healthy,
-            SBRecoveryState::Recovering => EntityHealthStatus::Healthy,
-            SBRecoveryState::TerminatedClean => EntityHealthStatus::Healthy,
-            SBRecoveryState::FailedRecovery => EntityHealthStatus::Unhealthy,
-        }
-    }
-
-    fn get_config(&self) -> &HeartbeatMonitoringConfig {
-        unimplemented!("This should never be called, it only applies to HB monitors.");
-    }
-}
-
-impl DumpStateReporter for SBRecoveryState {
-    fn dump(
-        &self,
-        writer: &mut dyn std::io::Write,
-        _args: &[&std::ffi::CStr],
-    ) -> Result<(), std::io::Error> {
-        writeln!(writer, "{self:?}")
-    }
-}
-
 #[cfg(test)]
 pub mod test_utils {
     use std::fmt::Display;
