@@ -1,0 +1,20 @@
+adellanzo@google.com
+mhue@google.com
+tantoshchuk@google.com
+tmot@google.com
+velena@google.com
+
+# EngManagers and UTL
+eserdem@google.com #{LAST_RESORT_SUGGESTION}
+guenael@google.com #{LAST_RESORT_SUGGESTION}
+vill@google.com #{LAST_RESORT_SUGGESTION}
+
+# Release team
+# Build ownership only used to resolve build breakages or critical release issues.
+hugojacob@google.com #{LAST_RESORT_SUGGESTION}
+
+# TPMS
+lscalia@google.com #{LAST_RESORT_SUGGESTION}
+stefanheintz@google.com #{LAST_RESORT_SUGGESTION}
+rizniazi@google.com #{LAST_RESORT_SUGGESTION}
+aobstoj@google.com #{LAST_RESORT_SUGGESTION}

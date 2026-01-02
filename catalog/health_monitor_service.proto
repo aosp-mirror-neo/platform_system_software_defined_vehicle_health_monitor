@@ -1,0 +1,64 @@
+// Copyright (C) 2026 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package com.sdv.google.health;
+
+import "health_config.proto";
+
+// RPC Interface of the VM Health Monitor Agent for querying details about the current VM
+// health.
+service HealthMonitorService {
+  // Returns the list of SDV service bundles that were created or started by the orchestrator on
+  // this VM.
+  rpc ListAllServiceBundles(ListAllServiceBundlesRequest) returns (ListAllServiceBundlesResponse) {}
+
+  // Returns the list of crashed SDV service bundles.
+  rpc ListCrashingServiceBundles(ListCrashingServiceBundlesRequest)
+      returns (ListCrashingServiceBundlesResponse) {}
+
+  // Returns the list of unhealthy monitored SDV service bundles, which registered for reporting
+  // heartbeats but failed to report heartbeats on time.
+  rpc ListUnhealthyMonitoredServiceBundles(ListUnhealthyMonitoredServiceBundlesRequest)
+      returns (ListUnhealthyMonitoredServiceBundlesResponse) {}
+}
+
+message ListAllServiceBundlesRequest {}
+
+message ListAllServiceBundlesResponse {
+  // Optional.
+  // List of FQINs of the service bundles that are created or started on this VM.
+  // It is empty if no service bundles are created or started on this VM.
+  repeated string fqin = 1;
+}
+
+message ListCrashingServiceBundlesRequest {}
+
+message ListCrashingServiceBundlesResponse {
+  // Optional.
+  // List of FQINs of the crashed SDV service bundles on this VM.
+  // It is empty if no service bundles are in the crashed state on this VM.
+  repeated string fqin = 1;
+}
+
+message ListUnhealthyMonitoredServiceBundlesRequest {}
+
+message ListUnhealthyMonitoredServiceBundlesResponse {
+  // Optional.
+  // List of FQINs of the unhealthy SDV service bundles on this VM which did not report their
+  // heartbeats on time according to their registered health configuration.
+  // It is empty if all monitored service bundles on the VM report their heartbeats on time.
+  repeated string fqin = 1;
+}

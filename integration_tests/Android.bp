@@ -1,0 +1,42 @@
+// Copyright (C) 2026 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+rust_test {
+    name: "sdv_core_core_services_integration_single_vm_hm_test",
+    srcs: [
+        "src/main.rs",
+    ],
+    defaults: ["health_monitor_stable@rust_defaults"],
+    rustlibs: [
+        "libbinder_rs",
+        "libclap",
+        "libtokio",
+        "liblog_rust",
+        "librustutils",
+        "libtokio_util",
+        "liblazy_static",
+        "libsdv_mw_rs_com_sdv_sample_oem_health_monitoring_vm_hm_bundle",
+        "libcom_sdv_google_health_health_monitor_service_rpc_rs",
+    ],
+    ld_flags: ["-Wl,--no-as-needed"],
+    require_root: true,
+    test_options: {
+        unit_test: false,
+    },
+    test_suites: [
+        "general-tests",
+        "automotive-sdv-tests",
+    ],
+    auto_gen_config: true,
+}

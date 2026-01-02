@@ -1,0 +1,66 @@
+# Copyright (C) 2026 The Android Open Source Project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# proto-file:
+# system/software_defined_vehicle/health_monitor/catalog/health_monitor_config.proto
+# proto-message: HealthMonitorConfiguration
+
+period_ms: 100
+monitored_agent {
+  agent_name: "sdv_diagnostics_agent"
+  binder_interface_name: "com.google.sdv.ISdvAgent/diagnostics"
+}
+monitored_agent {
+  agent_name: "sdv_dt_agent"
+  binder_interface_name: "google.sdv.data_tunnel.IAgentService/default"
+}
+monitored_agent {
+  agent_name: "sdv_init_open_dice"
+  binder_interface_name: "google.sdv.init_open_dice.IDiceChainProvider/default"
+}
+monitored_agent {
+  agent_name: "sdv_lifecycle_manager_agent"
+  binder_interface_name: "google.sdv.lifecycle.ILifecycleManager/default"
+}
+monitored_agent {
+  agent_name: "sdv_orchestrator_agent"
+  binder_interface_name: "com.google.sdv.ISdvAgent/orch"
+}
+monitored_agent {
+  agent_name: "sdv_rpc_agent"
+  binder_interface_name: "google.sdv.rpc.IRpcAgent/default"
+}
+monitored_agent {
+  agent_name: "sdv_sb_registry_agent"
+  binder_interface_name: "google.sdv.service_bundles_registry.IRegistry/default"
+}
+monitored_agent {
+  agent_name: "sdv_sd_agent"
+  binder_interface_name: "google.sdv.service_discovery.discovery.IServiceDiscoveryAgent/default"
+}
+monitored_agent {
+  agent_name: "sdv_someip_broker"
+  binder_interface_name: "com.google.sdv.ISdvAgent/someip_broker"
+}
+monitored_agent {
+  agent_name: "sdv_someip_stack"
+  binder_interface_name: "google.sdv.someip.ISomeIpStack/default"
+}
+monitored_agent {
+  agent_name: "sdv_vpm_agent"
+  binder_interface_name: "google.sdv.vpm.IPowerStateClientApi/default"
+}
+monitored_agent {
+  agent_name: "sdv_vsidl_provider_agent"
+  binder_interface_name: "com.google.sdv.ISdvAgent/vsidl_provider"
+}

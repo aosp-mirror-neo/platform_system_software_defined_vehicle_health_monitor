@@ -1,0 +1,56 @@
+// Copyright (C) 2026 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package com.sdv.google.health;
+
+// Service Bundle's configuration for health monitoring.
+// This configuration will be used primarily by in-VM SDV Health Monitor.
+// The service bundle is considered if its service heartbeats are missing or delayed, namely:
+// 1. The time passed between registration t_{0} and reporting the first
+// heartbeat t_{1} exceeds the initial delay t_{init}: t > t_{1} - t_{0},
+// 2. The time duration between two consecutive heartbeats (t_{i}, t_{i-1}) exceeds the sum of
+// reporting periods p multiplied by the number of periods N and task duration t_{exec}: t_{i} -
+// t_{i-1} > p*N + t_{exec}, or
+// 3. The time duration between the observation and the last reported heartbeat (t_{o}, t_{last})
+// exceeds the sum of reporting periods p multiplied by the number of periods N and task duration
+// t_{exec}: t_{o} - t_{last} > p*N + t_{exec}
+message HealthConfiguration {
+  // Required.
+  // Whether the service should report a heartbeat to the VM Health Monitor.
+  bool is_heartbeat_monitored = 1;
+
+  // Optional.
+  // Initial delay in milliseconds is the time between the service starts and its first heartbeat.
+  // Ignored if is_heartbeat_monitored is set to false.
+  optional uint64 initial_delay_ms = 2;
+
+  // Optional.
+  // Period of reporting a heartbeat in milliseconds which corresponds to the periodicity of
+  // executing a business logic by the SDV service. This value should be larger than 0.
+  // Ignored if is_heartbeat_monitored is set to false.
+  optional uint64 period_ms = 3;
+
+  // Optional.
+  // The number of periods missing a heartbeat before the Health Monitor should consider the
+  // service as unhealthy. This value should be larger than 0.
+  // Ignored if is_heartbeat_monitored is set to false.
+  optional uint64 num_periods = 4;
+
+  // Optional.
+  // Duration of the business logic the SDV service bundle executes in milliseconds.
+  // Ignored if is_heartbeat_monitored is set to false.
+  optional uint64 task_duration_ms = 5;
+}

@@ -1,0 +1,44 @@
+# Copyright (C) 2026 The Android Open Source Project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# proto-file: //system/software_defined_vehicle/core_services/vsidl/protos/sdv/vsidl/v1/syntax.proto
+# proto-message: VsidlEntry
+
+package: "com.sdv.google.health"
+
+# Defining a VM Health Monitor Agent, which
+# subscribes to multiple topics for reading the service heartbeats of critical SDV services bundles
+# and provides RPC interfaces for (de)registering from health monitoring
+# and retrieving details about unhealthy or crashed service bundles on the VM.
+service_bundle {
+
+  name: "HealthMonitorServiceBundle"
+
+  server {
+    service: "HealthMonitorRegistrationService"
+  }
+  server {
+    service: "HealthMonitorService"
+  }
+
+  publisher { message: "VmHealth" }
+
+  subscriber{ message: "ServiceHeartbeat"}
+}
+
+# Define a publisher for ServiceHeartbeat for runtime config generation (`generate_hm_stable_topic_mappings`)
+# to succeed - Will be addressed by b/380246543
+service_bundle {
+  name: "FakeBundle"
+  publisher { message: "ServiceHeartbeat"}
+}

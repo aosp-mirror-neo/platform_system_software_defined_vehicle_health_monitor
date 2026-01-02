@@ -1,0 +1,63 @@
+// Copyright (C) 2026 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+
+import "sdv/vsidl/v1/annotations.proto";
+
+package com.sdv.google.health;
+
+// Message describing VM Health.
+message VmHealth {
+  option (.sdv.vsidl.v1.publication) = {
+    // The size of the topic depends on the frequency of the health reports which is configurable by
+    // the OEM.
+    // DT should keep the data for at least 1 second, which results in
+    // - 100 messages for reporting every 10 ms
+    // - 20 messages for reporting every 50 ms
+    // VM Heatlh reports which are more frequent than 10 ms are not supported.
+    // This number might change based on the performance testing.
+    message_count: 100
+    // HM on each VM will publish a health report for its VM.
+    model: MULTI_PUB
+  };
+  // Required.
+  // Describes if all monitored service bundles are healthy and report heartbeats on time.
+  bool all_monitored_service_bundles_healthy = 1;
+
+  // Required.
+  // Describes if all service bundles which should be currently running on the VM are alive.
+  bool all_service_bundles_alive = 2;
+}
+
+// Topic describing health of a monitored SDV service bundle.
+message ServiceHeartbeat {
+  option (.sdv.vsidl.v1.publication) = {
+    // The size of the topic depends on the frequency of service heartbeats which is configurable by
+    // the OEM.
+    // DT should keep the data for at least 1 second, which results in
+    // - 100 messages for reporting every 10 ms
+    // - 20 messages for reporting every 50 ms
+    // Service heartbeats which are more frequent than 10 ms are not supported.
+    // This number might change based on the performance testing.
+    message_count: 100
+    // Each service bundle should be able to publish a service heartbeat.
+    model: MULTI_PUB
+  };
+  // Required.
+  // The current timestamp.
+  .google.protobuf.Timestamp timestamp = 1;
+}
