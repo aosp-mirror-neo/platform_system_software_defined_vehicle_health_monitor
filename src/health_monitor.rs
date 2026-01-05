@@ -13,7 +13,7 @@
 // limitations under the License.
 #![allow(missing_docs)]
 
-use crate::bundle_registration::RegistrationCommand;
+use crate::hb_explicit_registration::HBRegistrationCommand;
 pub use crate::health_reporter::MessagePublisher;
 use crate::monitor_manager::MonitorManager;
 use crate::monitor_model::EntityHealthStatus;
@@ -22,8 +22,8 @@ use crate::monitor_model::MonitorId;
 use crate::monitor_model::SBRecoveryState;
 use async_trait::async_trait;
 use authorization::AuthorizationImpl;
-use bundle_registration::RegistrationCommandError;
 pub use com_sdv_google_health_health_monitor_service_rpc::Interface as HealthMonitorService;
+use hb_explicit_registration::RegistrationCommandError;
 use hb_monitor_factory::HeartbeatMonitorFactory;
 use health_api::{
     health_monitor_service::{
@@ -57,8 +57,8 @@ use tracing::instrument;
 
 pub mod agent_monitor;
 pub mod authorization;
-pub mod bundle_registration;
 mod hb_config;
+pub mod hb_explicit_registration;
 pub mod hb_monitor;
 pub mod hb_monitor_factory;
 mod health_reporter;
@@ -91,7 +91,7 @@ impl HealthMonitor {
         &self,
         publisher: Box<dyn MessagePublisher<VmHealth>>,
         report_period_ms: u64,
-        request_rx: Receiver<RegistrationCommand>,
+        request_rx: Receiver<HBRegistrationCommand>,
         recovery_monitor_manager: Arc<MonitorManager>,
     ) {
         self.should_run.store(true, Ordering::SeqCst);
@@ -156,11 +156,11 @@ impl HealthMonitor {
 
     fn process_request_queue(
         monitors: &mut HashMap<MonitorId, Box<dyn EntityMonitor>>,
-        request_rx: &Receiver<RegistrationCommand>,
+        request_rx: &Receiver<HBRegistrationCommand>,
     ) {
         while let Ok(request) = request_rx.try_recv() {
             match request {
-                RegistrationCommand::Register(fqin, new_monitor, response_tx) => {
+                HBRegistrationCommand::Register(fqin, new_monitor, response_tx) => {
                     let id = MonitorId::BundleMonitorId(fqin);
                     // TODO: b/409710102 - Adjust logic once subscriber starts to report an error on publisher crash.
                     if let Some(existing_monitor) = monitors.get(&id) {
@@ -187,7 +187,7 @@ impl HealthMonitor {
                         });
                     }
                 }
-                RegistrationCommand::Unregister(fqin, response_tx) => {
+                HBRegistrationCommand::Unregister(fqin, response_tx) => {
                     monitors.remove(&MonitorId::BundleMonitorId(fqin));
                     response_tx.send(()).unwrap_or_else(|_| {
                         warn!("Unregistration, oneshot receiver unexpectedly dropped!")
@@ -383,14 +383,14 @@ pub mod tests {
         let (oneshot2_tx, oneshot2_rx) = tokio::sync::oneshot::channel();
 
         request_tx
-            .send(RegistrationCommand::Register(
+            .send(HBRegistrationCommand::Register(
                 Box::new(fqin.clone()),
                 Box::new(monitor1),
                 oneshot1_tx,
             ))
             .unwrap();
         request_tx
-            .send(RegistrationCommand::Register(Box::new(fqin), Box::new(monitor2), oneshot2_tx))
+            .send(HBRegistrationCommand::Register(Box::new(fqin), Box::new(monitor2), oneshot2_tx))
             .unwrap();
 
         HealthMonitor::process_request_queue(&mut monitors, &request_rx);
@@ -417,14 +417,14 @@ pub mod tests {
         let (oneshot2_tx, oneshot2_rx) = tokio::sync::oneshot::channel();
 
         request_tx
-            .send(RegistrationCommand::Register(
+            .send(HBRegistrationCommand::Register(
                 Box::new(fqin.clone()),
                 Box::new(monitor1),
                 oneshot1_tx,
             ))
             .unwrap();
         request_tx
-            .send(RegistrationCommand::Register(Box::new(fqin), Box::new(monitor2), oneshot2_tx))
+            .send(HBRegistrationCommand::Register(Box::new(fqin), Box::new(monitor2), oneshot2_tx))
             .unwrap();
 
         HealthMonitor::process_request_queue(&mut monitors, &request_rx);
@@ -444,7 +444,7 @@ pub mod tests {
             .returning(|| EntityHealthStatus::Healthy);
         let (healthy_oneshot_tx, healthy_oneshot_rx) = tokio::sync::oneshot::channel();
         register_commands_tx
-            .send(RegistrationCommand::Register(
+            .send(HBRegistrationCommand::Register(
                 Box::new(ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap()),
                 Box::new(healthy_service_monitor),
                 healthy_oneshot_tx,
@@ -457,7 +457,7 @@ pub mod tests {
             .returning(|| EntityHealthStatus::Unhealthy);
         let (unhealthy_oneshot_tx, unhealthy_oneshot_rx) = tokio::sync::oneshot::channel();
         register_commands_tx
-            .send(RegistrationCommand::Register(
+            .send(HBRegistrationCommand::Register(
                 Box::new(ServiceFqin::from_str(UNHEALTHY_SERVICE_FQIN_STR).unwrap()),
                 Box::new(unhealthy_service_monitor),
                 unhealthy_oneshot_tx,
@@ -504,7 +504,7 @@ pub mod tests {
             .returning(|| EntityHealthStatus::Healthy);
         let (healthy_oneshot_tx, healthy_oneshot_rx) = tokio::sync::oneshot::channel();
         register_commands_tx
-            .send(RegistrationCommand::Register(
+            .send(HBRegistrationCommand::Register(
                 Box::new(ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap()),
                 Box::new(healthy_service_monitor),
                 healthy_oneshot_tx,
@@ -850,7 +850,7 @@ pub mod tests {
         let healthy_service_monitor = MockEntityMonitor::new();
         let (registration_result_tx, registration_result_rx) = tokio::sync::oneshot::channel();
         register_commands_tx
-            .send(RegistrationCommand::Register(
+            .send(HBRegistrationCommand::Register(
                 Box::new(ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap()),
                 Box::new(healthy_service_monitor),
                 registration_result_tx,

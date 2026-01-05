@@ -22,8 +22,8 @@ use sdv_comms::{id::ServiceFqin, ContextRef};
 use sdv_dump::DumpBinderConnection;
 use sdv_dump::DumpManager;
 use sdv_health_monitor::agent_monitor::create_agent_monitor_entries;
-use sdv_health_monitor::bundle_registration::RegistrationCommand;
-use sdv_health_monitor::bundle_registration::ServiceBundleRegistrationInterface;
+use sdv_health_monitor::hb_explicit_registration::HBRegistrationCommand;
+use sdv_health_monitor::hb_explicit_registration::HBRegistrationListener;
 use sdv_health_monitor::monitor_manager::MonitorManager;
 use sdv_health_monitor::power_state::PowerStateReceiverFactory;
 use sdv_health_monitor::power_state::PowerStateReceiverFactoryImpl;
@@ -118,7 +118,7 @@ async fn setup_communication(
     power_state_receiver_factory: Arc<dyn PowerStateReceiverFactory>,
 ) -> anyhow::Result<(
     HealthMonitorServiceBundle,
-    Receiver<RegistrationCommand>,
+    Receiver<HBRegistrationCommand>,
     Box<dyn MessagePublisher<VmHealth>>,
 )> {
     let context = create_context()?;
@@ -130,11 +130,11 @@ async fn setup_communication(
     let sd = Arc::new(ServiceDiscoveryManager::new(context));
     let heartbeat_monitor_factory =
         Box::new(HeartbeatMonitorFactoryImpl::new(comms.clone(), sd, power_state_receiver_factory));
-    let (registration_commands_tx, r) = std::sync::mpsc::channel::<RegistrationCommand>();
+    let (registration_commands_tx, r) = std::sync::mpsc::channel::<HBRegistrationCommand>();
     let mut mw = HealthMonitorServiceBundle::new(
         comms,
         (
-            Arc::new(ServiceBundleRegistrationInterface::new(
+            Arc::new(HBRegistrationListener::new(
                 heartbeat_monitor_factory,
                 registration_commands_tx,
                 authorization,
