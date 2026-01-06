@@ -17,7 +17,7 @@ use sdv_comms::id::ServiceFqin;
 use sdv_dump::DumpStateReporter;
 use std::fmt::Display;
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum EntityHealthStatus {
     Healthy,
     Unhealthy,
@@ -82,5 +82,65 @@ impl DumpStateReporter for SBRecoveryState {
         _args: &[&std::ffi::CStr],
     ) -> Result<(), std::io::Error> {
         writeln!(writer, "{self:?}")
+    }
+}
+
+#[cfg(test)]
+pub mod test_utils {
+    use std::fmt::Display;
+
+    use crate::{
+        hb_config::HeartbeatMonitoringConfig,
+        monitor_model::{EntityHealthStatus, EntityMonitor},
+    };
+
+    #[derive(Copy, Clone)]
+    pub struct TestMonitor {
+        pub healthy: EntityHealthStatus,
+        pub config: HeartbeatMonitoringConfig,
+    }
+
+    impl EntityMonitor for TestMonitor {
+        fn get_health_status(&self) -> super::EntityHealthStatus {
+            self.healthy
+        }
+
+        fn get_config(&self) -> &HeartbeatMonitoringConfig {
+            &self.config
+        }
+    }
+
+    impl Display for TestMonitor {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            writeln!(f, "TEST MONITOR")?;
+            writeln!(f, "Healthy: {:?}", self.healthy)?;
+            writeln!(f, "Config: {:?}", self.config)
+        }
+    }
+
+    impl Default for TestMonitor {
+        fn default() -> Self {
+            Self { healthy: EntityHealthStatus::Healthy, config: Default::default() }
+        }
+    }
+
+    mod test {
+        use crate::{
+            hb_config::HeartbeatMonitoringConfig,
+            monitor_model::{test_utils::TestMonitor, EntityHealthStatus, EntityMonitor},
+        };
+
+        #[test]
+        fn test_monitor_default_reports_expected() {
+            let monitor = TestMonitor::default();
+            assert!(
+                monitor.get_health_status() == EntityHealthStatus::Healthy,
+                "Test monitor is not healthy!"
+            );
+            assert!(
+                monitor.config == HeartbeatMonitoringConfig::default(),
+                "Test monitor is not well configured!"
+            );
+        }
     }
 }

@@ -70,9 +70,14 @@ async fn main() -> anyhow::Result<()> {
         config.monitored_binders,
         power_state_receiver_factory.as_ref(),
     );
-
+    let (_sb_recovery_source, sb_recovery_events) = SbRecoveryEventSourceImpl::setup();
     let (hb_registration_commands_tx, hb_registration_commands_rx) = mpsc::channel(100);
-    let hm = Arc::new(HealthMonitor::new(hb_registration_commands_rx));
+    let monitor_manager =
+        MonitorManager::new(hb_registration_commands_rx, sb_recovery_events, agent_monitors);
+    let monitor_manager = Arc::new(monitor_manager);
+    dm.add_reporter("Recovery monitor manager", &monitor_manager);
+
+    let hm = Arc::new(HealthMonitor::new(monitor_manager));
     dm.add_reporter("Health monitor", &hm);
     let (_mw, vm_health_publisher) = setup_communication(
         hm.clone(),
@@ -83,12 +88,7 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     dm.set_agent_state("VM Health Reports publisher created");
 
-    let (_sb_recovery_source, sb_recovery_events) = SbRecoveryEventSourceImpl::setup();
-    let monitor_manager = MonitorManager::new(sb_recovery_events, agent_monitors);
-    let monitor_manager = Arc::new(monitor_manager);
-    dm.add_reporter("Recovery monitor manager", &monitor_manager);
-
-    hm.start(vm_health_publisher, config.period_ms, monitor_manager);
+    hm.start(vm_health_publisher, config.period_ms);
     dm.set_agent_state("Started");
 
     info!("Started VM Health Monitor");

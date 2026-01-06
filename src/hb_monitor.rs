@@ -305,7 +305,7 @@ mod tests {
         };
         let (_tx, rx) = watch::channel(PowerStateInfo::default());
         let monitor =
-            HeartbeatMonitor::new(stream::pending(), config.clone(), Box::new(SystemTime::now), rx);
+            HeartbeatMonitor::new(stream::pending(), config, Box::new(SystemTime::now), rx);
         assert_eq!(*monitor.get_config(), config);
     }
 

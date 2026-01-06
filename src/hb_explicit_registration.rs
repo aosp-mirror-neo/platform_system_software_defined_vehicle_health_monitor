@@ -144,7 +144,7 @@ impl HealthMonitorRegistrationService for HBRegistrationListener {
 mod tests {
     use super::*;
     use crate::hb_monitor_factory::MockHeartbeatMonitorFactory;
-    use crate::tests::MockEntityMonitor;
+    use crate::monitor_model::test_utils::TestMonitor;
     use health_api::health_config::HealthConfiguration;
     use protobuf::MessageField;
     use std::str::FromStr;
@@ -167,15 +167,12 @@ mod tests {
     #[tokio::test]
     async fn test_register_configuration_successful() {
         let mut monitor_factory = MockHeartbeatMonitorFactory::new();
-        let service_config =
+        let valid_parsed_config =
             HeartbeatMonitoringConfig::try_from(DEFAULT_VALID_CONFIG.clone()).unwrap();
-        monitor_factory.expect_new_monitor().returning(|_, _| {
-            let service_config =
-                HeartbeatMonitoringConfig::try_from(DEFAULT_VALID_CONFIG.clone()).unwrap();
-            let mut monitor = MockEntityMonitor::new();
-            monitor.expect_get_config().return_const(service_config);
-            Ok(Box::new(monitor))
-        });
+        let expected_monitor =
+            TestMonitor { config: valid_parsed_config, ..TestMonitor::default() };
+
+        monitor_factory.expect_new_monitor().returning(move |_, _| Ok(Box::new(expected_monitor)));
         let auth = AuthorizationImpl::new(ServiceFqin::from_str(HEALTH_MONITOR_FQIN).unwrap());
         let (command_tx, mut command_rx) = mpsc::channel(1);
         let interface = HBRegistrationListener::new(Box::new(monitor_factory), command_tx, auth);
@@ -197,7 +194,7 @@ mod tests {
             match command_rx.recv().await.unwrap() {
                 HBRegistrationCommand::Register(fqin, m, oneshot_tx) => {
                     assert_eq!(fqin.to_string(), HEALTHY_SERVICE_FQIN_STR);
-                    assert_eq!(*m.get_config(), service_config);
+                    assert_eq!(*m.get_config(), valid_parsed_config);
 
                     oneshot_tx.send(Ok(())).unwrap();
                 }
@@ -215,9 +212,7 @@ mod tests {
     #[tokio::test]
     async fn test_register_error_correctly_propagated_from_health_monitor_to_rpc_response() {
         let mut monitor_factory = MockHeartbeatMonitorFactory::new();
-        monitor_factory
-            .expect_new_monitor()
-            .returning(|_, _| Ok(Box::new(MockEntityMonitor::new())));
+        monitor_factory.expect_new_monitor().returning(|_, _| Ok(Box::new(TestMonitor::default())));
         let auth = AuthorizationImpl::new(ServiceFqin::from_str(HEALTH_MONITOR_FQIN).unwrap());
         let (command_tx, mut command_rx) = mpsc::channel(1);
         let interface = HBRegistrationListener::new(Box::new(monitor_factory), command_tx, auth);

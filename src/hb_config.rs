@@ -14,7 +14,7 @@
 
 use health_api::health_config::HealthConfiguration;
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Default, Copy)]
 pub struct HeartbeatMonitoringConfig {
     // The time between the service start and its first heartbeat.
     pub initial_delay_ms: u64,
