@@ -15,7 +15,9 @@
 use anyhow::anyhow;
 use log::error;
 use log::warn;
+use sdv_comms::id::ServiceFqin;
 use sdv_dump::DumpStateReporter;
+use sdv_status_rs::SdvResult;
 use std::collections::HashMap;
 use std::io::Error;
 use tokio::sync::mpsc;
@@ -24,32 +26,38 @@ use tokio::task::JoinHandle;
 
 use crate::hb_explicit_registration::HBRegistrationCommand;
 use crate::hb_explicit_registration::RegistrationCommandError;
+use crate::hb_monitor_factory::HeartbeatMonitorFactory;
+use crate::monitor_model::AgentName;
 use crate::monitor_model::EntityMonitor;
 use crate::monitor_model::SBRecoveryState;
-use crate::{monitor_model::MonitorId, sb_recovery_listener::ServiceBundleRecoveryEvent};
+use crate::sb_recovery_listener::ServiceBundleRecoveryEvent;
 
 pub struct MonitorManager {
     sb_recovery_events_processing: JoinHandle<()>,
     hb_registration_commands_processing: JoinHandle<()>,
-    pub sb_recovery_monitors: watch::Receiver<HashMap<MonitorId, SBRecoveryState>>,
+    pub sb_recovery_monitors: watch::Receiver<HashMap<ServiceFqin, SBRecoveryState>>,
     //TODO: enhance agent crash monitoring with recovery monitoring capabilities
-    pub agent_crash_monitors: HashMap<MonitorId, Box<dyn EntityMonitor>>,
-    pub hb_monitors: watch::Receiver<HashMap<MonitorId, Box<dyn EntityMonitor>>>,
+    pub agent_crash_monitors: HashMap<AgentName, Box<dyn EntityMonitor>>,
+    pub hb_monitors: watch::Receiver<HashMap<ServiceFqin, Box<dyn EntityMonitor>>>,
 }
 impl MonitorManager {
     pub fn new(
         hb_registration_commands: mpsc::Receiver<HBRegistrationCommand>,
         sb_recovery_events: mpsc::Receiver<ServiceBundleRecoveryEvent>,
-        agent_crash_monitors: HashMap<MonitorId, Box<dyn EntityMonitor>>,
+        agent_crash_monitors: HashMap<AgentName, Box<dyn EntityMonitor>>,
+        hb_monitor_factory: impl HeartbeatMonitorFactory + 'static,
     ) -> Self {
         let (sb_recovery_tx, sb_recovery_monitors) = watch::channel(HashMap::new());
         let sb_recovery_events_processing =
             tokio::spawn(Self::process_recovery_events(sb_recovery_events, sb_recovery_tx));
 
         let (hb_monitors_tx, hb_monitors) = watch::channel(HashMap::new());
-        let hb_registration_commands_processing = tokio::spawn(
-            Self::process_hb_registration_queue(hb_registration_commands, hb_monitors_tx),
-        );
+        let hb_registration_commands_processing =
+            tokio::spawn(Self::process_hb_registration_queue(
+                hb_registration_commands,
+                hb_monitors_tx,
+                hb_monitor_factory,
+            ));
 
         Self {
             sb_recovery_events_processing,
@@ -62,18 +70,17 @@ impl MonitorManager {
 
     async fn process_recovery_events(
         mut incoming_events: mpsc::Receiver<ServiceBundleRecoveryEvent>,
-        monitor_sink: watch::Sender<HashMap<MonitorId, SBRecoveryState>>,
+        monitor_sink: watch::Sender<HashMap<ServiceFqin, SBRecoveryState>>,
     ) {
         while let Some(event) = incoming_events.recv().await {
             monitor_sink.send_if_modified(|monitors| {
-                let id = MonitorId::BundleRecoveryMonitorId(Box::new(event.fqin));
-                let current = monitors.get(&id);
+                let current = monitors.get(&event.fqin);
                 let res = check_sb_recovery_transition(current, &event.new_state);
                 if res.is_err() {
-                    error!("For {id}: {res:?}. Yet, accepting new state");
+                    error!("For {}: {:?}. Yet, accepting new state", event.fqin, res);
                 }
 
-                monitors.insert(id, event.new_state);
+                monitors.insert(event.fqin, event.new_state);
                 true
             });
         }
@@ -81,51 +88,51 @@ impl MonitorManager {
 
     async fn process_hb_registration_queue(
         mut registration_requests: mpsc::Receiver<HBRegistrationCommand>,
-        monitors: watch::Sender<HashMap<MonitorId, Box<dyn EntityMonitor>>>,
+        monitors: watch::Sender<HashMap<ServiceFqin, Box<dyn EntityMonitor>>>,
+        monitor_factory: impl HeartbeatMonitorFactory,
     ) {
         // TODO(tmot): cleanup logic, enhance logic, to take recovery state into account,
         // TODO(tmot): post move to MonitorManager
         while let Some(request) = registration_requests.recv().await {
-            monitors.send_if_modified(|monitors|{
-                match request {
-                    HBRegistrationCommand::Register(fqin, new_monitor, response_tx) => {
-                        let id = MonitorId::BundleMonitorId(fqin);
-                        if let Some(existing_monitor) = monitors.get(&id) {
-                            if *existing_monitor.get_config() == *new_monitor.get_config() {
-                                warn!("Unregister and re-register {id:?} from health monitoring as it probably crashed");
-                                monitors.insert(id, new_monitor);
-                                response_tx.send(Ok(())).unwrap_or_else(|_| {
-                                    warn!(
-                                        "Re-registration case, oneshot receiver unexpectedly dropped!"
-                                    )
-                                });
-                                true
-                            } else {
-                                warn!("{id:?} is already registered for health monitoring");
-                                response_tx
-                                    .send(Err(RegistrationCommandError::AlreadyRegistered))
-                                    .unwrap_or_else(|_|
-                                        warn!("Already registered case, oneshot receiver unexpectedly dropped!")
-                                    );
-                                    false
-                            }
+            match request {
+                HBRegistrationCommand::Register(fqin, config, response_tx) => {
+                    let insert_monitor =
+                        if let Some(existing_monitor) = monitors.borrow().get(&fqin) {
+                            // insert if monitor found has same config: assuming instance has crashed
+                            *existing_monitor.get_config() == config
                         } else {
-                            monitors.insert(id, new_monitor);
-                            response_tx.send(Ok(())).unwrap_or_else(|_| {
-                                warn!("Normal registration, oneshot receiver unexpectedly dropped!")
-                            });
                             true
-                        }
-                    }
-                    HBRegistrationCommand::Unregister(fqin, response_tx) => {
-                        monitors.remove(&MonitorId::BundleMonitorId(fqin));
-                        response_tx.send(()).unwrap_or_else(|_| {
-                            warn!("Unregistration, oneshot receiver unexpectedly dropped!")
-                        });
-                        true
+                        };
+                    if insert_monitor {
+                        let new_monitor: SdvResult<Box<dyn EntityMonitor>> =
+                            monitor_factory.new_monitor(&fqin, config).await;
+                        let res = if let Ok(monitor) = new_monitor {
+                            monitors.send_modify(|m| {
+                                m.insert(fqin, monitor);
+                            });
+                            Ok(())
+                        } else {
+                            //TODO use SDVResult
+                            Err(RegistrationCommandError::PublicationNotFound)
+                        };
+                        response_tx
+                            .send(res)
+                            .unwrap_or_else(|_| warn!("Oneshot receiver unexpectedly dropped!"));
+                    } else {
+                        response_tx
+                            .send(Err(RegistrationCommandError::AlreadyRegistered))
+                            .unwrap_or_else(|_| warn!("Oneshot receiver unexpectedly dropped!"));
                     }
                 }
-            });
+                HBRegistrationCommand::Unregister(fqin, response_tx) => {
+                    monitors.send_modify(|m| {
+                        m.remove(&fqin);
+                    });
+                    response_tx.send(()).unwrap_or_else(|_| {
+                        warn!("Unregistration, oneshot receiver unexpectedly dropped!")
+                    });
+                }
+            };
         }
         error!("HB Registration channel unexpectedly closed!");
     }
@@ -142,7 +149,7 @@ impl DumpStateReporter for MonitorManager {
                 write!(
                     writer,
                     "MONITOR {i}:\n\
-                    ID: {id}\n"
+                    ID: FQIN: {id}\n"
                 )?;
                 monitor.dump(writer, args)?;
                 Result::Ok(())
@@ -159,7 +166,7 @@ impl DumpStateReporter for MonitorManager {
                 write!(
                     writer,
                     "MONITOR {i}:\n\
-                    ID: {id}\n"
+                    ID: Agent: {id}\n"
                 )?;
                 monitor.dump(writer, args)?;
                 Result::Ok(())
@@ -175,7 +182,7 @@ impl DumpStateReporter for MonitorManager {
                 write!(
                     writer,
                     "MONITOR {i}:\n\
-                    ID: {id}\n"
+                    ID: FQIN: {id}\n"
                 )?;
                 monitor.dump(writer, args)?;
                 Result::Ok(())
@@ -291,10 +298,7 @@ mod tests {
             monitor_rx.changed().await.unwrap();
             {
                 let monitors = monitor_rx.borrow_and_update();
-                assert_eq!(
-                    monitors.get(&MonitorId::BundleRecoveryMonitorId(Box::new(fqin1.clone()))),
-                    Some(&SBRecoveryState::Normal)
-                );
+                assert_eq!(monitors.get(&fqin1), Some(&SBRecoveryState::Normal));
             }
 
             // Second event for the same fqin
@@ -309,10 +313,7 @@ mod tests {
             monitor_rx.changed().await.unwrap();
             {
                 let monitors = monitor_rx.borrow_and_update();
-                assert_eq!(
-                    monitors.get(&MonitorId::BundleRecoveryMonitorId(Box::new(fqin1.clone()))),
-                    Some(&SBRecoveryState::Recovering)
-                );
+                assert_eq!(monitors.get(&fqin1), Some(&SBRecoveryState::Recovering));
             }
 
             // Event for a different fqin
@@ -328,10 +329,7 @@ mod tests {
             {
                 let monitors = monitor_rx.borrow_and_update();
                 assert_eq!(monitors.len(), 2);
-                assert_eq!(
-                    monitors.get(&MonitorId::BundleRecoveryMonitorId(Box::new(fqin2.clone()))),
-                    Some(&SBRecoveryState::Normal)
-                );
+                assert_eq!(monitors.get(&fqin2), Some(&SBRecoveryState::Normal));
             }
 
             // Invalid transition (recovering -> terminated_clean) for fqin1
@@ -346,10 +344,7 @@ mod tests {
             monitor_rx.changed().await.unwrap();
             {
                 let monitors = monitor_rx.borrow_and_update();
-                assert_eq!(
-                    monitors.get(&MonitorId::BundleRecoveryMonitorId(Box::new(fqin1.clone()))),
-                    Some(&SBRecoveryState::TerminatedClean)
-                );
+                assert_eq!(monitors.get(&fqin1), Some(&SBRecoveryState::TerminatedClean));
             }
 
             // A new, valid transition(terminated_clean->normal) (SB started again),
@@ -364,10 +359,7 @@ mod tests {
             monitor_rx.changed().await.unwrap();
             {
                 let monitors = monitor_rx.borrow_and_update();
-                assert_eq!(
-                    monitors.get(&MonitorId::BundleRecoveryMonitorId(Box::new(fqin1.clone()))),
-                    Some(&SBRecoveryState::Normal)
-                );
+                assert_eq!(monitors.get(&fqin1), Some(&SBRecoveryState::Normal));
             }
 
             drop(event_tx);
@@ -379,6 +371,7 @@ mod tests {
         use super::*;
         use crate::hb_config::HeartbeatMonitoringConfig;
         use crate::hb_explicit_registration::HBRegistrationCommand;
+        use crate::hb_monitor_factory::MockHeartbeatMonitorFactory;
         use crate::monitor_model::test_utils::TestMonitor;
         use futures::task::noop_waker_ref;
         use futures::task::Poll;
@@ -392,6 +385,10 @@ mod tests {
             // SETUP
             let fqin = ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap();
             let monitor1 = TestMonitor::default();
+            let config = monitor1.config;
+
+            let mut monitor_factory = MockHeartbeatMonitorFactory::new();
+            monitor_factory.expect_new_monitor().returning(move |_, _| Ok(Box::new(monitor1)));
 
             let (monitors_tx, monitors_rx) = tokio::sync::watch::channel(HashMap::new());
             let (request_tx, request_rx) = tokio::sync::mpsc::channel(10);
@@ -400,19 +397,19 @@ mod tests {
 
             // ACT
             request_tx
-                .send(HBRegistrationCommand::Register(
-                    Box::new(fqin.clone()),
-                    Box::new(monitor1),
-                    oneshot1_tx,
-                ))
+                .send(HBRegistrationCommand::Register(fqin.clone(), config, oneshot1_tx))
                 .await
                 .unwrap();
 
-            tokio::spawn(MonitorManager::process_hb_registration_queue(request_rx, monitors_tx));
+            tokio::spawn(MonitorManager::process_hb_registration_queue(
+                request_rx,
+                monitors_tx,
+                monitor_factory,
+            ));
 
             // ASSERT
             assert!(oneshot1_rx.await.unwrap().is_ok());
-            assert!(monitors_rx.borrow().contains_key(&MonitorId::BundleMonitorId(Box::new(fqin))))
+            assert!(monitors_rx.borrow().contains_key(&fqin))
         }
 
         #[tokio::test]
@@ -421,20 +418,23 @@ mod tests {
             // from internal monitor holding structure
 
             // SETUP
-            let fqin = Box::new(ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap());
+            let fqin = ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap();
             let monitor1 = Box::new(TestMonitor::default()) as Box<dyn EntityMonitor>;
 
-            let (monitors_tx, monitors_rx) = tokio::sync::watch::channel(HashMap::from([(
-                MonitorId::BundleMonitorId(fqin.clone()),
-                monitor1,
-            )]));
+            let (monitors_tx, monitors_rx) =
+                tokio::sync::watch::channel(HashMap::from([(fqin.clone(), monitor1)]));
             let (request_tx, request_rx) = tokio::sync::mpsc::channel(10);
 
             // ACT
             let (oneshot_tx, oneshot_rx) = tokio::sync::oneshot::channel();
             request_tx.send(HBRegistrationCommand::Unregister(fqin, oneshot_tx)).await.unwrap();
 
-            tokio::spawn(MonitorManager::process_hb_registration_queue(request_rx, monitors_tx));
+            let monitor_factory = MockHeartbeatMonitorFactory::new();
+            tokio::spawn(MonitorManager::process_hb_registration_queue(
+                request_rx,
+                monitors_tx,
+                monitor_factory,
+            ));
 
             // ASSERT
             oneshot_rx.await.unwrap();
@@ -449,6 +449,8 @@ mod tests {
             let fqin = ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap();
 
             let monitor1 = TestMonitor::default();
+            let config1 = monitor1.config;
+
             let monitor2 = TestMonitor {
                 config: HeartbeatMonitoringConfig {
                     initial_delay_ms: 0xCAFEu64,
@@ -456,30 +458,30 @@ mod tests {
                 },
                 ..Default::default()
             };
+            let config2 = monitor2.config;
+
+            let mut monitor_factory = MockHeartbeatMonitorFactory::new();
+            monitor_factory.expect_new_monitor().returning(move |_, _| Ok(Box::new(monitor1)));
 
             let (request_tx, request_rx) = tokio::sync::mpsc::channel(10);
             let (oneshot1_tx, oneshot1_rx) = tokio::sync::oneshot::channel();
             let (oneshot2_tx, oneshot2_rx) = tokio::sync::oneshot::channel();
 
             request_tx
-                .send(HBRegistrationCommand::Register(
-                    Box::new(fqin.clone()),
-                    Box::new(monitor1),
-                    oneshot1_tx,
-                ))
+                .send(HBRegistrationCommand::Register(fqin.clone(), config1, oneshot1_tx))
                 .await
                 .unwrap();
             request_tx
-                .send(HBRegistrationCommand::Register(
-                    Box::new(fqin),
-                    Box::new(monitor2),
-                    oneshot2_tx,
-                ))
+                .send(HBRegistrationCommand::Register(fqin, config2, oneshot2_tx))
                 .await
                 .unwrap();
 
             let (monitors_tx, _monitors_rx) = tokio::sync::watch::channel(HashMap::new());
-            tokio::spawn(MonitorManager::process_hb_registration_queue(request_rx, monitors_tx));
+            tokio::spawn(MonitorManager::process_hb_registration_queue(
+                request_rx,
+                monitors_tx,
+                monitor_factory,
+            ));
 
             assert!(oneshot1_rx.await.unwrap().is_ok());
             assert!(oneshot2_rx.await.unwrap().is_err());
@@ -492,31 +494,30 @@ mod tests {
             let fqin = ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap();
 
             let monitor1 = TestMonitor::default();
-            let monitor2 = TestMonitor::default();
+            let config = monitor1.config;
+
+            let mut monitor_factory = MockHeartbeatMonitorFactory::new();
+            monitor_factory.expect_new_monitor().returning(move |_, _| Ok(Box::new(monitor1)));
 
             let (request_tx, request_rx) = tokio::sync::mpsc::channel(10);
             let (oneshot1_tx, oneshot1_rx) = tokio::sync::oneshot::channel();
             let (oneshot2_tx, oneshot2_rx) = tokio::sync::oneshot::channel();
 
             request_tx
-                .send(HBRegistrationCommand::Register(
-                    Box::new(fqin.clone()),
-                    Box::new(monitor1),
-                    oneshot1_tx,
-                ))
+                .send(HBRegistrationCommand::Register(fqin.clone(), config, oneshot1_tx))
                 .await
                 .unwrap();
             request_tx
-                .send(HBRegistrationCommand::Register(
-                    Box::new(fqin),
-                    Box::new(monitor2),
-                    oneshot2_tx,
-                ))
+                .send(HBRegistrationCommand::Register(fqin, config, oneshot2_tx))
                 .await
                 .unwrap();
 
             let (monitors_tx, _monitors_rx) = tokio::sync::watch::channel(HashMap::new());
-            tokio::spawn(MonitorManager::process_hb_registration_queue(request_rx, monitors_tx));
+            tokio::spawn(MonitorManager::process_hb_registration_queue(
+                request_rx,
+                monitors_tx,
+                monitor_factory,
+            ));
 
             assert!(oneshot1_rx.await.unwrap().is_ok());
             assert!(oneshot2_rx.await.unwrap().is_ok());
@@ -527,11 +528,13 @@ mod tests {
             // setup
             let (register_commands_tx, register_commands_rx) = tokio::sync::mpsc::channel(10);
             let healthy_service_monitor = TestMonitor::default();
+            let config = healthy_service_monitor.config;
+
             let (registration_result_tx, registration_result_rx) = tokio::sync::oneshot::channel();
             register_commands_tx
                 .send(HBRegistrationCommand::Register(
-                    Box::new(ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap()),
-                    Box::new(healthy_service_monitor),
+                    ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(),
+                    config,
                     registration_result_tx,
                 ))
                 .await
@@ -539,9 +542,15 @@ mod tests {
 
             //setup for running the future once
             let (monitors_tx, _monitors_rx) = tokio::sync::watch::channel(HashMap::new());
+            let mut monitor_factory = MockHeartbeatMonitorFactory::new();
+            monitor_factory
+                .expect_new_monitor()
+                .returning(move |_, _| Ok(Box::new(healthy_service_monitor)));
+
             let mut pinned_fut = Box::pin(MonitorManager::process_hb_registration_queue(
                 register_commands_rx,
                 monitors_tx,
+                monitor_factory,
             ));
             let mut cx = Context::from_waker(noop_waker_ref());
 
@@ -564,18 +573,16 @@ mod tests {
         let monitored_sb_fqin = "vm:com.google.test.TestSB/instance1";
 
         let agent_crash_monitors = HashMap::from([(
-            MonitorId::AgentMonitorId("Hello Agent".to_string()),
+            "Hello Agent".to_string(),
             Box::new(TestMonitor::default()) as Box<dyn EntityMonitor>,
         )]);
 
         let (_, hb_monitors) = watch::channel(HashMap::from([(
-            MonitorId::BundleMonitorId(Box::new(ServiceFqin::from_str(monitored_sb_fqin).unwrap())),
+            ServiceFqin::from_str(monitored_sb_fqin).unwrap(),
             Box::new(TestMonitor::default()) as Box<dyn EntityMonitor>,
         )]));
         let (_, sb_recovery_monitors) = watch::channel(HashMap::from([(
-            MonitorId::BundleRecoveryMonitorId(Box::new(
-                ServiceFqin::from_str(monitored_sb_fqin).unwrap(),
-            )),
+            ServiceFqin::from_str(monitored_sb_fqin).unwrap(),
             SBRecoveryState::Normal,
         )]));
         let mm = MonitorManager {

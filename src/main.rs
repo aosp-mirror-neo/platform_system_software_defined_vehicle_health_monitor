@@ -20,18 +20,15 @@ use rustutils::android::system_properties;
 use sdv_comms::sd::ServiceDiscoveryManager;
 use sdv_comms::{id::ServiceFqin, ContextRef};
 use sdv_dump::DumpBinderConnection;
-use sdv_dump::DumpManager;
 use sdv_health_monitor::agent_monitor::create_agent_monitor_entries;
-use sdv_health_monitor::hb_explicit_registration::HBRegistrationCommand;
 use sdv_health_monitor::hb_explicit_registration::HBRegistrationListener;
 use sdv_health_monitor::monitor_manager::MonitorManager;
 use sdv_health_monitor::power_state::PowerStateReceiverFactory;
 use sdv_health_monitor::power_state::PowerStateReceiverFactoryImpl;
 use sdv_health_monitor::sb_recovery_listener::SbRecoveryEventSourceImpl;
-use sdv_health_monitor::HealthMonitorService;
 use sdv_health_monitor::{
     authorization::AuthorizationImpl, hb_monitor_factory::HeartbeatMonitorFactoryImpl,
-    vm_config::Config, HealthMonitor, MessagePublisher,
+    vm_config::Config, HealthMonitor,
 };
 use sdv_mw_rs_com_sdv_google_health_health_monitor_service_bundle::{
     publisher, HealthMonitorServiceBundle,
@@ -54,10 +51,8 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::get_from_sys_prop(system_properties::read);
     let report_period_ms = Arc::new(config.period_ms);
     dm.add_reporter("VM health report period:", &report_period_ms);
-
     sdv_tracing::init_tracing();
     binder::ProcessState::start_thread_pool();
-
     info!("Starting VM Health Monitor...");
     let wait_span = info_span!("health_monitor::wait_for_agents").entered();
     sdv_comms_ctx::wait_for_agents()?;
@@ -66,27 +61,49 @@ async fn main() -> anyhow::Result<()> {
     let power_state_receiver_factory: Arc<dyn PowerStateReceiverFactory> =
         Arc::new(PowerStateReceiverFactoryImpl::new());
 
+    let context = create_context()?;
+    let id = context.get_self_fqin();
+    dm.set_self_fqin(id.to_string());
+    dm.set_agent_state("FQIN retrieved");
+    let comms = Arc::new(SdvComms { context });
+    let sd = Arc::new(ServiceDiscoveryManager::new(context));
+
     let agent_monitors = create_agent_monitor_entries(
         config.monitored_binders,
         power_state_receiver_factory.as_ref(),
     );
-    let (_sb_recovery_source, sb_recovery_events) = SbRecoveryEventSourceImpl::setup();
+    let (_sb_recovery_events_source, sb_recovery_events) = SbRecoveryEventSourceImpl::setup();
     let (hb_registration_commands_tx, hb_registration_commands_rx) = mpsc::channel(100);
-    let monitor_manager =
-        MonitorManager::new(hb_registration_commands_rx, sb_recovery_events, agent_monitors);
+    let hb_monitor_factory = HeartbeatMonitorFactoryImpl::new(
+        comms.clone(),
+        sd,
+        Arc::new(PowerStateReceiverFactoryImpl::new()),
+    );
+    let monitor_manager = MonitorManager::new(
+        hb_registration_commands_rx,
+        sb_recovery_events,
+        agent_monitors,
+        hb_monitor_factory,
+    );
     let monitor_manager = Arc::new(monitor_manager);
     dm.add_reporter("Recovery monitor manager", &monitor_manager);
 
     let hm = Arc::new(HealthMonitor::new(monitor_manager));
     dm.add_reporter("Health monitor", &hm);
-    let (_mw, vm_health_publisher) = setup_communication(
-        hm.clone(),
-        &dm,
-        hb_registration_commands_tx,
-        power_state_receiver_factory,
-    )
-    .await?;
-    dm.set_agent_state("VM Health Reports publisher created");
+
+    let (_mw, vm_health_publisher) = {
+        let authorization = AuthorizationImpl::new(id);
+        let hb_registration_listener =
+            Arc::new(HBRegistrationListener::new(hb_registration_commands_tx, authorization));
+        let mut mw = HealthMonitorServiceBundle::new(comms, (hb_registration_listener, hm.clone()))
+            .await
+            .map_err(|e| anyhow!("Could not create middleware bundle: {:?}", e))?;
+        let publisher = mw
+            .take_publisher(publisher::Variant::<VmHealth>::UNIQUE)
+            .ok_or_else(|| anyhow!("Could not take publisher from mw"))?;
+        dm.set_agent_state("VM Health Reports publisher created");
+        (mw, Box::new(publisher))
+    };
 
     hm.start(vm_health_publisher, config.period_ms);
     dm.set_agent_state("Started");
@@ -98,43 +115,6 @@ async fn main() -> anyhow::Result<()> {
     future::pending::<()>().await;
     error!("VM Health Monitor shutdown");
     Ok(())
-}
-
-// TODO(tmot): simplify/remove, once HealthMonitorService logic is decoupled from hb monitor holder
-async fn setup_communication(
-    hm_status_query_interface: Arc<dyn HealthMonitorService>,
-    dm: &DumpManager,
-    registration_commands_tx: mpsc::Sender<HBRegistrationCommand>,
-    power_state_receiver_factory: Arc<dyn PowerStateReceiverFactory>,
-) -> anyhow::Result<(HealthMonitorServiceBundle, Box<dyn MessagePublisher<VmHealth>>)> {
-    let context = create_context()?;
-    let id = context.get_self_fqin();
-    dm.set_self_fqin(id.to_string());
-    dm.set_agent_state("FQIN retrieved");
-    let authorization = AuthorizationImpl::new(id);
-    let comms = Arc::new(SdvComms { context });
-    let sd = Arc::new(ServiceDiscoveryManager::new(context));
-    let heartbeat_monitor_factory =
-        Box::new(HeartbeatMonitorFactoryImpl::new(comms.clone(), sd, power_state_receiver_factory));
-    let mut mw = HealthMonitorServiceBundle::new(
-        comms,
-        (
-            Arc::new(HBRegistrationListener::new(
-                heartbeat_monitor_factory,
-                registration_commands_tx,
-                authorization,
-            )),
-            hm_status_query_interface,
-        ),
-    )
-    .await
-    .map_err(|e| anyhow!("Could not create middleware bundle: {:?}", e))?;
-    let create_pub_span = info_span!("health_monitor::create_report_publisher").entered();
-    let publisher = mw
-        .take_publisher(publisher::Variant::<VmHealth>::UNIQUE)
-        .ok_or_else(|| anyhow!("Could not take publisher from mw"))?;
-    create_pub_span.exit();
-    Ok((mw, Box::new(publisher)))
 }
 
 fn create_context() -> anyhow::Result<ContextRef> {

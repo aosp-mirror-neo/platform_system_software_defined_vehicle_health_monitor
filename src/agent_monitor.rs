@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::monitor_model::AgentBinderId;
+use crate::monitor_model::AgentName;
 use crate::monitor_model::EntityHealthStatus;
 use crate::monitor_model::EntityMonitor;
-use crate::monitor_model::MonitorId;
 use crate::power_state::PowerState;
 use crate::power_state::{PowerStateInfo, PowerStateReceiverFactory};
 use crate::read_sys_prop::get_agent_binder_timeout;
@@ -37,15 +37,14 @@ use tokio::time::timeout;
 pub fn create_agent_monitor_entries(
     config: Vec<BinderServiceAgent>,
     power_state_rx_factory: &dyn PowerStateReceiverFactory,
-) -> HashMap<MonitorId, Box<dyn EntityMonitor>> {
+) -> HashMap<AgentName, Box<dyn EntityMonitor>> {
     let binder_timeout = get_agent_binder_timeout(rustutils::android::system_properties::read);
     config
         .into_iter()
         .map(|monitor_config| {
-            let id = monitor_config.agent_name;
             let binder = monitor_config.binder_interface_name;
             (
-                MonitorId::AgentMonitorId(id),
+                monitor_config.agent_name,
                 Box::new(AgentHealthMonitor::<BinderInteractionImpl>::new(
                     binder,
                     binder_timeout,

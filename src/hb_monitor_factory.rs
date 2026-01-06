@@ -48,6 +48,7 @@ pub trait HeartbeatMonitorFactory: Send + Sync {
         config: HeartbeatMonitoringConfig,
     ) -> SdvResult<Box<dyn EntityMonitor>>;
 }
+
 pub struct HeartbeatMonitorFactoryImpl {
     comms: Arc<dyn Communicate>,
     service_discovery: Arc<dyn ServiceUnitDefinitionDiscoverer>,

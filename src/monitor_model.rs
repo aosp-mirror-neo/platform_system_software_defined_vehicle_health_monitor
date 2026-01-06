@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::hb_config::HeartbeatMonitoringConfig;
-use sdv_comms::id::ServiceFqin;
 use sdv_dump::DumpStateReporter;
-use std::fmt::Display;
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum EntityHealthStatus {
@@ -31,25 +29,6 @@ pub trait EntityMonitor: DumpStateReporter {
 
 pub type AgentBinderId = String;
 pub type AgentName = String;
-
-#[derive(Debug, Hash, Eq, PartialEq)]
-pub enum MonitorId {
-    AgentMonitorId(AgentName),
-    BundleMonitorId(Box<ServiceFqin>), // boxed to reduce size difference between variants
-    BundleRecoveryMonitorId(Box<ServiceFqin>), // TODO: Unify with BundleMonitorId, currently performing HB monitoring
-}
-
-impl Display for MonitorId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MonitorId::AgentMonitorId(name) => write!(f, "Agent: {name}"),
-            MonitorId::BundleMonitorId(fqin) => write!(f, "FQIN: {fqin}"),
-            MonitorId::BundleRecoveryMonitorId(fqin) => {
-                write!(f, "FQIN: {fqin}")
-            }
-        }
-    }
-}
 
 // TODO: keep struct at least until Orch implements all instance states
 #[derive(Clone, Debug, PartialEq)]

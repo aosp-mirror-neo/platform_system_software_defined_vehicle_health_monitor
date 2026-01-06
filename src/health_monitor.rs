@@ -15,14 +15,13 @@
 
 pub use crate::health_reporter::MessagePublisher;
 use crate::monitor_manager::MonitorManager;
+use crate::monitor_model::AgentName;
 use crate::monitor_model::EntityHealthStatus;
 use crate::monitor_model::EntityMonitor;
-use crate::monitor_model::MonitorId;
 use crate::monitor_model::SBRecoveryState;
 use async_trait::async_trait;
 use authorization::AuthorizationImpl;
 pub use com_sdv_google_health_health_monitor_service_rpc::Interface as HealthMonitorService;
-use hb_monitor_factory::HeartbeatMonitorFactory;
 use health_api::{
     health_monitor_service::{
         ListAllServiceBundlesRequest, ListAllServiceBundlesResponse,
@@ -34,6 +33,7 @@ use health_api::{
 use health_reporter::HealthReporter;
 use log::{error, warn};
 use protobuf::well_known_types::timestamp::Timestamp;
+use sdv_comms::id::ServiceFqin;
 pub use sdv_dump::DumpBinderConnection;
 use sdv_dump::DumpStateReporter;
 use std::sync::Mutex;
@@ -113,9 +113,9 @@ impl HealthMonitor {
     }
 
     fn report_state(
-        heartbeat_monitors: &HashMap<MonitorId, Box<dyn EntityMonitor>>,
-        sb_recovery_monitors: &HashMap<MonitorId, SBRecoveryState>,
-        agent_crash_monitors: &HashMap<MonitorId, Box<dyn EntityMonitor>>,
+        heartbeat_monitors: &HashMap<ServiceFqin, Box<dyn EntityMonitor>>,
+        sb_recovery_monitors: &HashMap<ServiceFqin, SBRecoveryState>,
+        agent_crash_monitors: &HashMap<AgentName, Box<dyn EntityMonitor>>,
         health_reporter: &HealthReporter,
     ) {
         let hbs_missed = heartbeat_monitors
@@ -187,13 +187,7 @@ impl HealthMonitorService for HealthMonitor {
             .borrow()
             .iter()
             .filter(|(_, value)| value.get_health_status() == EntityHealthStatus::Unhealthy)
-            .filter_map(|(key, _)| {
-                if let MonitorId::BundleMonitorId(id) = key {
-                    Some(id.to_string())
-                } else {
-                    None
-                }
-            })
+            .map(|(fqin, _)| fqin.to_string())
             .collect();
 
         Ok(ListUnhealthyMonitoredServiceBundlesResponse {
@@ -229,6 +223,7 @@ impl DumpStateReporter for HealthMonitor {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::hb_monitor_factory::MockHeartbeatMonitorFactory;
     use crate::health_reporter::MockMessagePublisher;
     use crate::monitor_model::test_utils::TestMonitor;
     use crate::tests::utils::StringWriter;
@@ -247,8 +242,12 @@ pub mod tests {
         let hm = {
             let (_, hb_registration_commands) = mpsc::channel(1);
             let (_, hb_recovery_events) = mpsc::channel(1);
-            let monitor_manager =
-                MonitorManager::new(hb_registration_commands, hb_recovery_events, HashMap::new());
+            let monitor_manager = MonitorManager::new(
+                hb_registration_commands,
+                hb_recovery_events,
+                HashMap::new(),
+                MockHeartbeatMonitorFactory::new(),
+            );
             let monitor_manager = Arc::new(monitor_manager);
             HealthMonitor::new(monitor_manager)
         };
@@ -274,9 +273,7 @@ pub mod tests {
             TestMonitor { healthy: EntityHealthStatus::Unhealthy, ..TestMonitor::default() };
 
         let hb_monitors = HashMap::from([(
-            MonitorId::BundleMonitorId(Box::new(
-                ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(),
-            )),
+            ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(),
             Box::new(unhealthy_hb_monitor) as Box<dyn EntityMonitor>,
         )]);
 
@@ -326,7 +323,7 @@ pub mod tests {
 
         let sb_recovery_monitors = HashMap::new();
         let agent_crash_monitors = HashMap::from([(
-            MonitorId::AgentMonitorId("1".to_string()),
+            "1".to_string(),
             Box::new(unhealthy_agent_monitor) as Box<dyn EntityMonitor>,
         )]);
 
@@ -360,17 +357,10 @@ pub mod tests {
 
         let sb_recovery_monitors = HashMap::from([
             (
-                MonitorId::BundleRecoveryMonitorId(Box::new(
-                    ServiceFqin::from_str(UNHEALTHY_SERVICE_FQIN_STR).unwrap(),
-                )),
+                ServiceFqin::from_str(UNHEALTHY_SERVICE_FQIN_STR).unwrap(),
                 SBRecoveryState::FailedRecovery,
             ),
-            (
-                MonitorId::BundleRecoveryMonitorId(Box::new(
-                    ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(),
-                )),
-                SBRecoveryState::Normal,
-            ),
+            (ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(), SBRecoveryState::Normal),
         ]);
 
         // ACT
@@ -402,9 +392,7 @@ pub mod tests {
         let health_reporter = HealthReporter::new(Box::new(publisher));
 
         let sb_recovery_monitors = HashMap::from([(
-            MonitorId::BundleRecoveryMonitorId(Box::new(
-                ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(),
-            )),
+            ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(),
             SBRecoveryState::Recovering,
         )]);
 
@@ -437,9 +425,7 @@ pub mod tests {
         let health_reporter = HealthReporter::new(Box::new(publisher));
 
         let sb_recovery_monitors = HashMap::from([(
-            MonitorId::BundleRecoveryMonitorId(Box::new(
-                ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(),
-            )),
+            ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap(),
             SBRecoveryState::Normal,
         )]);
 
@@ -459,8 +445,12 @@ pub mod tests {
         let hm = {
             let (_, hb_registration_commands) = mpsc::channel(1);
             let (_, hb_recovery_events) = mpsc::channel(1);
-            let monitor_manager =
-                MonitorManager::new(hb_registration_commands, hb_recovery_events, HashMap::new());
+            let monitor_manager = MonitorManager::new(
+                hb_registration_commands,
+                hb_recovery_events,
+                HashMap::new(),
+                MockHeartbeatMonitorFactory::new(),
+            );
             let monitor_manager = Arc::new(monitor_manager);
             HealthMonitor::new(monitor_manager)
         };
@@ -483,8 +473,12 @@ pub mod tests {
         let hm = {
             let (_, hb_registration_commands) = mpsc::channel(1);
             let (_, hb_recovery_events) = mpsc::channel(1);
-            let monitor_manager =
-                MonitorManager::new(hb_registration_commands, hb_recovery_events, HashMap::new());
+            let monitor_manager = MonitorManager::new(
+                hb_registration_commands,
+                hb_recovery_events,
+                HashMap::new(),
+                MockHeartbeatMonitorFactory::new(),
+            );
             let monitor_manager = Arc::new(monitor_manager);
             HealthMonitor::new(monitor_manager)
         };
@@ -537,8 +531,12 @@ pub mod tests {
         let hm = {
             let (_, hb_registration_commands) = mpsc::channel(1);
             let (_, hb_recovery_events) = mpsc::channel(1);
-            let monitor_manager =
-                MonitorManager::new(hb_registration_commands, hb_recovery_events, HashMap::new());
+            let monitor_manager = MonitorManager::new(
+                hb_registration_commands,
+                hb_recovery_events,
+                HashMap::new(),
+                MockHeartbeatMonitorFactory::new(),
+            );
             let monitor_manager = Arc::new(monitor_manager);
             HealthMonitor::new(monitor_manager)
         };

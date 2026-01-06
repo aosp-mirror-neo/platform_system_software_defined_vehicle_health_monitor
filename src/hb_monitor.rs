@@ -48,6 +48,12 @@ impl HeartbeatEvent {
     }
 }
 
+impl From<HeartbeatMonitor> for Box<dyn EntityMonitor> {
+    fn from(value: HeartbeatMonitor) -> Self {
+        Box::new(value) as Box<dyn EntityMonitor>
+    }
+}
+
 pub struct HeartbeatMonitor {
     heartbeat_listener_task: tokio::task::JoinHandle<()>,
     last_event: watch::Receiver<HeartbeatEvent>,
