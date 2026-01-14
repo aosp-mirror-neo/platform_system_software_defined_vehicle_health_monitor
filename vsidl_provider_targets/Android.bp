@@ -44,7 +44,7 @@ genrule {
         ":libhealth_vsidl_with_bp_file",
     ],
     cmd: "$(location vsidl_rc_generator) " +
-        " --vsidl-path  system/software_defined_vehicle/core_services/vsidl/protos" +
+        " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
         " --package-name com.sdv.google.health",
@@ -75,7 +75,7 @@ genrule {
         ":libhealth_vsidl_with_bp_file",
     ],
     cmd: "$(location vsidl_rc_generator) " +
-        " --vsidl-path  system/software_defined_vehicle/core_services/vsidl/protos" +
+        " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
         " --package-name com.sdv.sample_oem.health.monitored",
@@ -106,7 +106,7 @@ genrule {
         ":libhealth_vsidl_with_bp_file",
     ],
     cmd: "$(location vsidl_rc_generator) " +
-        " --vsidl-path  system/software_defined_vehicle/core_services/vsidl/protos" +
+        " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
         " --package-name com.sdv.sample_oem.health.monitoring",
@@ -137,7 +137,7 @@ genrule {
         ":libhealth_vsidl_with_bp_file",
     ],
     cmd: "$(location vsidl_rc_generator) " +
-        " --vsidl-path  system/software_defined_vehicle/core_services/vsidl/protos" +
+        " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
         " --package-name com.sdv.google.health" +
@@ -169,7 +169,7 @@ genrule {
         ":libhealth_vsidl_with_bp_file",
     ],
     cmd: "$(location vsidl_rc_generator) " +
-        " --vsidl-path  system/software_defined_vehicle/core_services/vsidl/protos" +
+        " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
         " --package-name com.sdv.google.health" +
@@ -201,7 +201,7 @@ genrule {
         ":libhealth_vsidl_with_bp_file",
     ],
     cmd: "$(location vsidl_rc_generator) " +
-        " --vsidl-path  system/software_defined_vehicle/core_services/vsidl/protos" +
+        " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
         " --package-name com.sdv.sample_oem.health.monitored" +
@@ -233,7 +233,7 @@ genrule {
         ":libhealth_vsidl_with_bp_file",
     ],
     cmd: "$(location vsidl_rc_generator) " +
-        " --vsidl-path  system/software_defined_vehicle/core_services/vsidl/protos" +
+        " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
         " --package-name com.sdv.sample_oem.health.monitored" +
@@ -265,7 +265,7 @@ genrule {
         ":libhealth_vsidl_with_bp_file",
     ],
     cmd: "$(location vsidl_rc_generator) " +
-        " --vsidl-path  system/software_defined_vehicle/core_services/vsidl/protos" +
+        " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
         " --package-name com.sdv.sample_oem.health.monitoring" +
@@ -296,7 +296,7 @@ genrule {
         ":libhealth_vsidl_with_bp_file",
     ],
     cmd: "$(location vsidl_rc_generator) " +
-        " --vsidl-path  system/software_defined_vehicle/core_services/vsidl/protos" +
+        " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) ",
     out: [
