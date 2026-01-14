@@ -22,6 +22,7 @@ use health_api::health_monitor_registration_service::{
 };
 use log::{info, warn};
 use sdv_comms::id::ServiceFqin;
+use sdv_status_rs::SdvResult;
 use sdv_status_rs::SdvStatus;
 use sdv_status_rs::SdvStatusCode;
 use tokio::sync::mpsc;
@@ -31,12 +32,9 @@ use tracing::instrument;
 #[derive(Debug)]
 pub enum HBRegistrationAction {
     RegisterImplicitly(HeartbeatMonitoringConfig),
-    RegisterExplicitly(
-        HeartbeatMonitoringConfig,
-        oneshot::Sender<Result<(), RegistrationCommandError>>,
-    ),
+    RegisterExplicitly(HeartbeatMonitoringConfig, oneshot::Sender<SdvResult<()>>),
     UnregisterImplicitly,
-    UnregisterExplicitly(oneshot::Sender<()>),
+    UnregisterExplicitly(oneshot::Sender<SdvResult<()>>),
 }
 
 #[derive(Debug)]
@@ -107,18 +105,12 @@ impl HealthMonitorRegistrationService for HBRegistrationListener {
                 SdvStatusCode::Unknown,
                 "Health Reporter Registration Queue unexpectedly closed",
             )))?;
-        let rx = rx.await.or(Err(SdvStatus::with_message(
-            SdvStatusCode::Unknown,
-            "Registration Command Oneshot Channel unexpectedly closed",
-        )))?;
-
-        match rx {
-            Ok(_) => Ok(RegisterConfigurationResponse::new()),
-            Err(_) => Err(SdvStatus::with_message(
-                SdvStatusCode::AlreadyExists,
-                "Already registered for health monitoring".to_string(),
-            )),
-        }
+        rx.await
+            .or(Err(SdvStatus::with_message(
+                SdvStatusCode::Unknown,
+                "Registration Command Oneshot Channel unexpectedly closed",
+            )))?
+            .map(|_| RegisterConfigurationResponse::new())
     }
 
     #[instrument(skip(self))]
@@ -140,12 +132,13 @@ impl HealthMonitorRegistrationService for HBRegistrationListener {
                 warn!("{err}");
                 SdvStatus::with_message(SdvStatusCode::Internal, err)
             })?;
-        rx.await.map_err(|_| {
-            let err = "Could not receive deregistration ack command, oneshot dropped!";
-            warn!("{err}");
-            SdvStatus::with_message(SdvStatusCode::Internal, err)
-        })?;
-        Ok(UnregisterConfigurationResponse::new())
+        rx.await
+            .map_err(|_| {
+                let err = "Could not receive deregistration ack command, oneshot dropped!";
+                warn!("{err}");
+                SdvStatus::with_message(SdvStatusCode::Internal, err)
+            })?
+            .map(|_| UnregisterConfigurationResponse::new())
     }
 }
 
@@ -252,7 +245,7 @@ mod tests {
                     fqin: _,
                     action: HBRegistrationAction::RegisterExplicitly(_, oneshot_tx),
                 } => {
-                    oneshot_tx.send(Err(RegistrationCommandError::AlreadyRegistered)).unwrap();
+                    oneshot_tx.send(Err(SdvStatus::new(SdvStatusCode::AlreadyExists))).unwrap();
                 }
                 HBRegistrationCommand {
                     fqin: _,
@@ -358,7 +351,7 @@ mod tests {
                     fqin: _,
                     action: HBRegistrationAction::UnregisterExplicitly(oneshot_tx),
                 } => {
-                    oneshot_tx.send(()).unwrap();
+                    oneshot_tx.send(Ok(())).unwrap();
                 }
                 _ => panic!("Unexpected command type"),
             }

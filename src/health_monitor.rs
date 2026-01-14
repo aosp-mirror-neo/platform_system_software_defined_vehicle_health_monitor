@@ -55,10 +55,10 @@ pub mod agent_monitor;
 pub mod authorization;
 mod hb_config;
 pub mod hb_explicit_registration;
+pub mod hb_implicit_monitoring_db;
 pub mod hb_monitor;
 pub mod hb_monitor_factory;
 mod health_reporter;
-pub mod implicit_monitoring_db;
 pub mod monitor_manager;
 pub mod monitor_model;
 pub mod power_state;
@@ -227,9 +227,9 @@ impl DumpStateReporter for HealthMonitor {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::hb_implicit_monitoring_db::ImplicitMonitoringConfigRepo;
     use crate::hb_monitor_factory::MockHeartbeatMonitorFactory;
     use crate::health_reporter::MockMessagePublisher;
-    use crate::implicit_monitoring_db::ImplicitMonitoringConfigRepo;
     use crate::monitor_model::test_utils::TestMonitor;
     use crate::sb_recovery_monitor::{SBLifecycleState, SBOrchestrationState, SBRecoveryState};
     use crate::tests::utils::StringWriter;
