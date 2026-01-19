@@ -66,7 +66,6 @@ async fn main() -> anyhow::Result<()> {
     let id = context.get_self_fqin();
     dm.set_self_fqin(id.to_string());
     dm.set_agent_state("FQIN retrieved");
-    let comms = Arc::new(SdvComms { context });
     let sd = Arc::new(ServiceDiscoveryManager::new(context));
 
     let agent_monitors = create_agent_monitor_entries(
@@ -76,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
     let (_sb_recovery_events_source, sb_recovery_events) = SbRecoveryEventSourceImpl::setup();
     let (hb_registration_commands_tx, hb_registration_commands_rx) = mpsc::channel(100);
     let hb_monitor_factory = HeartbeatMonitorFactoryImpl::new(
-        comms.clone(),
+        context,
         sd,
         Arc::new(PowerStateReceiverFactoryImpl::new()),
     );
@@ -95,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
     dm.add_reporter("Health monitor", &hm);
 
     let (_mw, vm_health_publisher) = {
+        let comms = Arc::new(SdvComms { context });
         let authorization = AuthorizationImpl::new(id);
         let hb_registration_listener =
             Arc::new(HBRegistrationListener::new(hb_registration_commands_tx, authorization));

@@ -80,6 +80,7 @@ rust_defaults {
         "libsdv_dump",
         "libmockall",
         "libfutures",
+        "libtap",
         "libtokio",
         "libtokio_stream",
         "libhealth_api",

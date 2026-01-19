@@ -20,24 +20,24 @@ use futures::stream::StreamExt;
 use futures::Stream;
 use health_api::health_topic::ServiceHeartbeat;
 use mockall::automock;
+use sdv_comms::dt::SubscriberOptions;
+use sdv_comms::dt::SubscriberStream;
+use sdv_comms::sd::UnitNameDiscoveryArgs;
+use sdv_comms::ContextRef;
 use sdv_comms::{
     id::ServiceFqin,
     sd::{ServiceDiscoveryManager, ServiceUnitDefinition, UnitType},
 };
 use sdv_mw_rs_comms::observe;
-use sdv_mw_rs_comms::UnitName;
-use sdv_mw_rs_comms::UnitQuery;
-use sdv_mw_rs_comms::{Communicate, SubscribeOptions};
 use sdv_status_rs::SdvResult;
 use sdv_status_rs::SdvStatus;
+use std::future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::SystemTime;
-use tracing::{info_span, instrument, Instrument};
-
-const HEARTBEAT_UNIT_TYPE_PACKAGE: &str = "com.sdv.google.health";
-const HEARTBEAT_UNIT_TYPE_BUNDLE: &str = "HealthMonitorServiceBundle";
-const HEARTBEAT_UNIT_TYPE_NAME: &str = "ServiceHeartbeat";
+use tap::prelude::*;
+use tracing::instrument;
 
 #[automock]
 #[async_trait]
@@ -50,50 +50,18 @@ pub trait HeartbeatMonitorFactory: Send + Sync {
 }
 
 pub struct HeartbeatMonitorFactoryImpl {
-    comms: Arc<dyn Communicate>,
+    context: ContextRef,
     service_discovery: Arc<dyn ServiceUnitDefinitionDiscoverer>,
     power_state_receiver_factory: Arc<dyn PowerStateReceiverFactory>,
 }
 
 impl HeartbeatMonitorFactoryImpl {
     pub fn new(
-        comms: Arc<dyn Communicate>,
+        context: ContextRef,
         service_discovery: Arc<dyn ServiceUnitDefinitionDiscoverer>,
         power_state_receiver_factory: Arc<dyn PowerStateReceiverFactory>,
     ) -> Self {
-        Self { comms, service_discovery, power_state_receiver_factory }
-    }
-
-    #[instrument(skip(self))]
-    async fn find_heartbeat_publisher_service_unit_name(
-        &self,
-        service_fqin: &ServiceFqin,
-    ) -> SdvResult<String> {
-        let unit_type = UnitType::builder()
-            .set_sdv_package_name(HEARTBEAT_UNIT_TYPE_PACKAGE)
-            .set_service_bundle_name(HEARTBEAT_UNIT_TYPE_BUNDLE)
-            .set_unit_type_name(HEARTBEAT_UNIT_TYPE_NAME)
-            .build()?;
-
-        let list_sud_span =
-            info_span!("health_monitor::heartbeat_monitor_factory::list_sud").entered();
-        let mut service_units_stream = self.service_discovery.list_by_type(&unit_type);
-        list_sud_span.exit();
-
-        while let Some(service_unit) = service_units_stream
-            .next()
-            .instrument(info_span!("health_monitor::heartbeat_monitor_factory::list_single_sud"))
-            .await
-        {
-            if service_unit.get_owning_fqin() == *service_fqin {
-                return Ok(service_unit.get_unit_name());
-            }
-        }
-
-        Err(SdvStatus::with_message(
-            sdv_status_rs::SdvStatusCode::NotFound,
-            format!("Could not find any service units for {service_fqin}"),
-        ))
+        Self { context, service_discovery, power_state_receiver_factory }
     }
 }
 
@@ -105,33 +73,71 @@ impl HeartbeatMonitorFactory for HeartbeatMonitorFactoryImpl {
         fqin: &ServiceFqin,
         config: HeartbeatMonitoringConfig,
     ) -> SdvResult<Box<dyn EntityMonitor>> {
-        let service_unit_name = self.find_heartbeat_publisher_service_unit_name(fqin).await?;
+        let sud = get_existing_hb_sud(self.service_discovery.as_ref(), fqin).await?;
+        let stream = hb_sud_to_hb_stream(self.context, &sud).await?;
 
-        let unit_name_query = &UnitQuery::Name(
-            UnitName::builder()
-                .vm_name(fqin.get_sdv_vm_name())
-                .package_name(fqin.get_sdv_package_name())
-                .bundle_name(fqin.get_service_bundle_name())
-                .instance_name(fqin.get_service_instance_name())
-                .service_unit_name(service_unit_name)
-                .build()?,
-        );
-
-        let publication_future = self.comms.find_publication(unit_name_query);
-        let publication = publication_future
-            .instrument(info_span!("health_monitor::heartbeat_monitor_factory::find_publication"))
-            .await?;
-
-        let subscriber_options = &SubscribeOptions::builder().read_on_subscribe(true).build()?;
-        let untyped_stream = publication.observe(subscriber_options).await?;
-        let typed_stream = observe::<ServiceHeartbeat>(Box::pin(untyped_stream));
         Ok(Box::new(HeartbeatMonitor::new(
-            typed_stream,
+            stream,
             config,
             Box::new(SystemTime::now),
             self.power_state_receiver_factory.create_receiver(),
         )))
     }
+}
+
+/// Queries SD agent for heartbeat service unit definition of fqin.
+/// Assumes that publication was already registered with SD.
+/// Assumption implication: although future contains a suspend point, this should be an
+/// almost instantaneously completing future
+async fn get_existing_hb_sud(
+    service_discovery: &(impl ServiceUnitDefinitionDiscoverer + ?Sized),
+    fqin: &ServiceFqin,
+) -> SdvResult<ServiceUnitDefinition> {
+    let query = UnitNameDiscoveryArgs::new_builder()
+        .set_sdv_vm_name(fqin.get_sdv_vm_name())
+        .set_sdv_package_name(fqin.get_sdv_package_name())
+        .set_service_bundle_name(fqin.get_service_bundle_name())
+        .build()?;
+
+    let hb_unit_type = build_hb_unit_type()?;
+    service_discovery
+        .list_units_by_name(&query)
+        .filter(|sud| {
+            future::ready(
+                sud.get_service_bundle_identity().get_fqin().get_service_instance_name()
+                    == fqin.get_service_instance_name(),
+            )
+        })
+        .filter(|sud| future::ready(sud.get_unit_type() == hb_unit_type))
+        .next()
+        .await
+        .ok_or(SdvStatus::new(sdv_status_rs::SdvStatusCode::NotFound))
+}
+
+async fn hb_sud_to_hb_stream(
+    context: ContextRef,
+    hb_sud: &ServiceUnitDefinition,
+) -> SdvResult<Pin<Box<dyn Stream<Item = SdvResult<Vec<ServiceHeartbeat>>> + Send>>> {
+    let untyped_stream = SubscriberStream::create(
+        context,
+        &hb_sud.get_unit_identifier(),
+        Duration::ZERO, // min time between notifications
+        SubscriberOptions { fetch_last_message: true },
+    )
+    .await?;
+
+    untyped_stream.pipe(Box::pin).pipe(|s| observe::<ServiceHeartbeat>(s)).pipe(Ok)
+}
+
+fn build_hb_unit_type() -> SdvResult<UnitType> {
+    const PACKAGE: &str = "com.sdv.google.health";
+    const BUNDLE: &str = "HealthMonitorServiceBundle";
+    const TYPE_NAME: &str = "ServiceHeartbeat";
+    UnitType::builder()
+        .set_sdv_package_name(PACKAGE)
+        .set_service_bundle_name(BUNDLE)
+        .set_unit_type_name(TYPE_NAME)
+        .build()
 }
 
 /// Interface to ServiceUnitDefinition functionality, allowing unit testing
@@ -151,19 +157,17 @@ impl SudProvider for ServiceUnitDefinition {
 
 /// Interface to ServiceDiscoveryManager functionality, allowing unit testing
 pub trait ServiceUnitDefinitionDiscoverer: Send + Sync {
-    fn list_by_type(
+    fn list_units_by_name(
         &self,
-        unit_type: &UnitType,
-    ) -> Pin<Box<dyn Stream<Item = Box<dyn SudProvider>> + Send>>;
+        name_args: &UnitNameDiscoveryArgs,
+    ) -> Pin<Box<dyn Stream<Item = ServiceUnitDefinition> + Send>>;
 }
 impl ServiceUnitDefinitionDiscoverer for ServiceDiscoveryManager {
-    fn list_by_type(
+    fn list_units_by_name(
         &self,
-        unit_type: &UnitType,
-    ) -> Pin<Box<dyn Stream<Item = Box<dyn SudProvider>> + Send>> {
-        Box::pin(
-            self.list_units_by_type(unit_type).map(|sud| Box::new(sud) as Box<dyn SudProvider>),
-        )
+        name_args: &UnitNameDiscoveryArgs,
+    ) -> Pin<Box<dyn Stream<Item = ServiceUnitDefinition> + Send>> {
+        Box::pin(self.list_units_by_name(name_args))
     }
 }
 
@@ -182,6 +186,8 @@ mod tests {
     use sdv_mw_rs_comms::ReadHistory;
     use sdv_mw_rs_comms::Subscribe;
     use sdv_mw_rs_comms::SubscribeOptions;
+    use sdv_mw_rs_comms::UnitName;
+    use sdv_mw_rs_comms::UnitQuery;
     use std::str::FromStr;
     use tokio::sync::watch;
 
@@ -202,27 +208,13 @@ mod tests {
         }
     }
 
-    struct SUDMock {}
-    impl SudProvider for SUDMock {
-        fn get_unit_name(&self) -> String {
-            CUSTOM_UNIT_NAME.to_owned()
-        }
-
-        fn get_owning_fqin(&self) -> ServiceFqin {
-            ServiceFqin::from_str(&format!(
-                "{MONITORED_FQIN_VM}:{MONITORED_FQIN_PACKAGE}.{MONITORED_FQIN_BUNDLE}/{MONITORED_FQIN_INSTANCE}"
-            ))
-            .unwrap()
-        }
-    }
-
     struct ServiceDiscoveryMock;
     impl ServiceUnitDefinitionDiscoverer for ServiceDiscoveryMock {
-        fn list_by_type(
+        fn list_units_by_name(
             &self,
-            _: &UnitType,
-        ) -> Pin<Box<dyn Stream<Item = Box<dyn SudProvider>> + Send>> {
-            Box::pin(stream::iter([Box::new(SUDMock {}) as Box<dyn SudProvider>]))
+            _name_args: &UnitNameDiscoveryArgs,
+        ) -> Pin<Box<dyn Stream<Item = ServiceUnitDefinition> + Send>> {
+            unimplemented!("hb factory generics under rework");
         }
     }
 
@@ -269,7 +261,7 @@ mod tests {
             rx
         });
         let factory = HeartbeatMonitorFactoryImpl::new(
-            Arc::new(mock_comms),
+            ContextRef::create(fqin.clone()),
             Arc::new(ServiceDiscoveryMock {}),
             Arc::new(mock_power_state_factory),
         );
