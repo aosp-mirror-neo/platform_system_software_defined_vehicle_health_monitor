@@ -19,6 +19,7 @@ use crate::power_state::PowerState;
 use crate::power_state::PowerStateInfo;
 use futures::future;
 use futures::stream;
+use futures::Stream;
 use futures::StreamExt;
 use health_api::health_topic::ServiceHeartbeat;
 use log::{error, warn};
@@ -26,7 +27,6 @@ use protobuf::well_known_types::timestamp::Timestamp;
 use sdv_dump::DumpStateReporter;
 use sdv_status_rs::SdvResult;
 use std::cmp;
-use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 use tokio::sync::watch;
 
@@ -72,7 +72,6 @@ impl HeartbeatMonitor {
     pub fn new(
         heartbeat_publication: impl futures::stream::Stream<Item = SdvResult<Vec<ServiceHeartbeat>>>
             + Send
-            + Unpin
             + 'static,
         health_config: HeartbeatMonitoringConfig,
         current_time_provider: Box<dyn Fn() -> SystemTime + Send + Sync + 'static>,
@@ -159,41 +158,35 @@ impl EntityMonitor for HeartbeatMonitor {
 }
 
 trait HeartbeatStream {
-    fn into_sanitized_heartbeats(
-        self,
-    ) -> Pin<Box<dyn futures::stream::Stream<Item = SystemTime> + Send>>;
+    fn into_sanitized_heartbeats(self) -> impl futures::stream::Stream<Item = SystemTime> + Send;
 }
 
 impl<T> HeartbeatStream for T
 where
-    T: futures::stream::Stream<Item = SdvResult<Vec<ServiceHeartbeat>>> + Send + Unpin + 'static,
+    T: futures::stream::Stream<Item = SdvResult<Vec<ServiceHeartbeat>>> + Send,
 {
-    fn into_sanitized_heartbeats(
-        self,
-    ) -> Pin<Box<dyn futures::stream::Stream<Item = SystemTime> + Send>> {
-        let s = self
-            .filter_map(|r| async move {
-                if let Ok(hbs) = r {
-                    Some(hbs)
-                } else {
-                    warn!("Heartbeat stream unexpectedly returned {r:?}. Continuing monitoring.");
-                    None
-                }
-            })
-            .flat_map(stream::iter)
-            .map(|hb| hb.timestamp.unwrap_or_default().into())
-            .scan(Timestamp::default().into(), |last_hb, new_hb| {
-                let r = if new_hb >= *last_hb {
-                    *last_hb = new_hb;
-                    Some(Some(new_hb))
-                } else {
-                    warn!("Non monotonic clock issue: received out of order heartbeat. Ignoring.");
-                    Some(None)
-                };
-                future::ready(r)
-            })
-            .filter_map(future::ready);
-        Box::pin(s)
+    fn into_sanitized_heartbeats(self) -> impl Stream<Item = SystemTime> + Send {
+        self.filter_map(|r| async move {
+            if let Ok(hbs) = r {
+                Some(hbs)
+            } else {
+                warn!("Heartbeat stream unexpectedly returned {r:?}. Continuing monitoring.");
+                None
+            }
+        })
+        .flat_map(stream::iter)
+        .map(|hb| hb.timestamp.unwrap_or_default().into())
+        .scan(Timestamp::default().into(), |last_hb, new_hb| {
+            let r = if new_hb >= *last_hb {
+                *last_hb = new_hb;
+                Some(Some(new_hb))
+            } else {
+                warn!("Non monotonic clock issue: received out of order heartbeat. Ignoring.");
+                Some(None)
+            };
+            future::ready(r)
+        })
+        .filter_map(future::ready)
     }
 }
 
@@ -256,10 +249,10 @@ mod tests {
 
         pub fn create_mock_controllable_hb_stream() -> (
             watch::Sender<Result<Vec<ServiceHeartbeat>, SdvStatusCode>>,
-            Pin<Box<dyn futures::stream::Stream<Item = SdvResult<Vec<ServiceHeartbeat>>> + Send>>,
+            impl futures::stream::Stream<Item = SdvResult<Vec<ServiceHeartbeat>>> + Send,
         ) {
             let (tx, rx) = watch::channel(Ok(vec![]));
-            (tx, Box::pin(WatchStream::from_changes(rx).map(|hbs| hbs.map_err(SdvStatus::new))))
+            (tx, WatchStream::from_changes(rx).map(|hbs| hbs.map_err(SdvStatus::new)))
         }
 
         impl HeartbeatMonitor {

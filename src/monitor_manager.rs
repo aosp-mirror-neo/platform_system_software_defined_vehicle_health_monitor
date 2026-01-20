@@ -167,12 +167,11 @@ impl MonitorManager {
                 HBRegistrationAction::RegisterImplicitly(config)
                 | HBRegistrationAction::RegisterExplicitly(config, _) => {
                     process_registration_for_hb_monitoring(
-                        fqin,
-                        config,
-                        &monitors,
                         &monitor_factory,
+                        config,
+                        fqin,
+                        &monitors,
                     )
-                    .await
                 }
                 HBRegistrationAction::UnregisterExplicitly(_)
                 | HBRegistrationAction::UnregisterImplicitly => {
@@ -196,19 +195,15 @@ impl MonitorManager {
     }
 }
 
-pub async fn process_registration_for_hb_monitoring(
-    fqin: ServiceFqin,
-    monitor_config: HeartbeatMonitoringConfig,
-    hb_monitors: &watch::Sender<HashMap<ServiceFqin, Box<dyn EntityMonitor>>>,
+pub fn process_registration_for_hb_monitoring(
     monitor_factory: &impl HeartbeatMonitorFactory,
+    config: HeartbeatMonitoringConfig,
+    fqin: ServiceFqin,
+    hb_monitors: &watch::Sender<HashMap<ServiceFqin, Box<dyn EntityMonitor>>>,
 ) -> SdvResult<()> {
-    // TODO(tmot): Move HB SUD discovery logic inside monitor,
-    // as this call should not suspend queue processing
-    let new_monitor = monitor_factory.new_monitor(&fqin, monitor_config).await?;
-
-    // TODO(tmot): until HBMonitor can report that process has crashed, replace monitor always
+    let m = monitor_factory.new_monitor(&fqin, config)?;
     hb_monitors.send_modify(|hb_monitors| {
-        hb_monitors.insert(fqin, new_monitor);
+        hb_monitors.insert(fqin, m);
     });
     Ok(())
 }
