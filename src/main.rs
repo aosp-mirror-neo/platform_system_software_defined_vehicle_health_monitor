@@ -23,6 +23,7 @@ use sdv_dump::DumpBinderConnection;
 use sdv_health_monitor::agent_monitor::create_agent_monitor_entries;
 use sdv_health_monitor::hb_explicit_registration::HBRegistrationListener;
 use sdv_health_monitor::hb_implicit_monitoring_db::ImplicitMonitoringConfigRepo;
+use sdv_health_monitor::hb_monitor_factory::CommsImpl;
 use sdv_health_monitor::monitor_manager::MonitorManager;
 use sdv_health_monitor::power_state::PowerStateReceiverFactory;
 use sdv_health_monitor::power_state::PowerStateReceiverFactoryImpl;
@@ -66,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
     let id = context.get_self_fqin();
     dm.set_self_fqin(id.to_string());
     dm.set_agent_state("FQIN retrieved");
-    let sd = Arc::new(ServiceDiscoveryManager::new(context));
+    let sd = ServiceDiscoveryManager::new(context);
 
     let agent_monitors = create_agent_monitor_entries(
         config.monitored_binders,
@@ -74,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let (_sb_recovery_events_source, sb_recovery_events) = SbRecoveryEventSourceImpl::setup();
     let (hb_registration_commands_tx, hb_registration_commands_rx) = mpsc::channel(100);
-    let hb_monitor_factory = HeartbeatMonitorFactoryImpl::new(
+    let hb_monitor_factory = HeartbeatMonitorFactoryImpl::<CommsImpl>::new(
         context,
         sd,
         Arc::new(PowerStateReceiverFactoryImpl::new()),
