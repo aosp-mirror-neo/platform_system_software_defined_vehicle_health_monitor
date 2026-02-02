@@ -59,6 +59,10 @@ impl ServiceHealthConfig {
 impl TryFrom<HealthConfiguration> for ServiceHealthConfig {
     type Error = String;
     fn try_from(value: HealthConfiguration) -> Result<Self, Self::Error> {
+        if !value.is_heartbeat_monitored {
+            return Err("is_heartbeat_monitored must be set to true".to_string());
+        }
+
         let config = Self {
             initial_delay_ms: value.initial_delay_ms.unwrap_or_default(),
             period_ms: value.period_ms.unwrap_or_default(),
@@ -77,6 +81,7 @@ mod tests {
     #[test]
     fn test_try_from_valid_health_configuration() {
         let health_config = HealthConfiguration {
+            is_heartbeat_monitored: true,
             initial_delay_ms: Some(100),
             period_ms: Some(200),
             num_periods: Some(3),
@@ -96,8 +101,29 @@ mod tests {
     }
 
     #[test]
+    fn test_try_from_valid_health_configuration_with_is_heartbeat_monitored_set_to_false() {
+        let health_config = HealthConfiguration {
+            is_heartbeat_monitored: false,
+            initial_delay_ms: Some(100),
+            period_ms: Some(200),
+            num_periods: Some(3),
+            task_duration_ms: Some(40),
+            ..Default::default()
+        };
+
+        let service_health_config = ServiceHealthConfig::try_from(health_config);
+
+        assert!(service_health_config.is_err());
+        assert_eq!(
+            service_health_config.unwrap_err(),
+            "is_heartbeat_monitored must be set to true"
+        );
+    }
+
+    #[test]
     fn test_try_from_health_configuration_with_invalid_period_ms() {
         let health_config = HealthConfiguration {
+            is_heartbeat_monitored: true,
             initial_delay_ms: Some(100),
             period_ms: Some(0), // Invalid: period_ms must be greater than 0
             num_periods: Some(3),
@@ -114,6 +140,7 @@ mod tests {
     #[test]
     fn test_try_from_health_configuration_with_invalid_num_periods() {
         let health_config = HealthConfiguration {
+            is_heartbeat_monitored: true,
             initial_delay_ms: Some(100),
             period_ms: Some(200),
             num_periods: Some(0), // Invalid: num_periods must be greater than 0
