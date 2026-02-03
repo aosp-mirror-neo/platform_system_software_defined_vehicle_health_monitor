@@ -67,6 +67,8 @@ mod tests {
         // Needed for multipub subscriber in VmMonitoringService to function.
         binder::ProcessState::start_thread_pool();
 
+        sdv_log::init_logger("sdv_hm_integration_test").expect("Logger initialisation never fails");
+
         let mut service_bundle_1 = monitored_service_cmd();
 
         info!("Verifying initial VM health reports VM is healthy.");

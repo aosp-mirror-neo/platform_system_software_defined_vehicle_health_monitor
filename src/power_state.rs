@@ -156,8 +156,11 @@ impl PowerStateUpdater {
         self.tx.send_modify(|state| match power_event {
             &PowerStateReport::SUSPEND_TO_RAM_POST_FINISH
             | &PowerStateReport::SUSPEND_TO_DISK_POST_FINISH => {
-                state.last_resume_time = Some(SystemTime::now());
                 state.stage = PowerState::Suspended;
+            }
+            &PowerStateReport::SUSPEND_TO_RAM_EXIT | &PowerStateReport::SUSPEND_TO_DISK_EXIT => {
+                state.last_resume_time = Some(SystemTime::now());
+                state.stage = PowerState::Running;
             }
             &PowerStateReport::POWER_OFF_POST_FINISH => {
                 state.stage = PowerState::ShuttingDown;
@@ -345,5 +348,20 @@ mod tests {
 
         updater.update(&PowerStateReport::ON).unwrap();
         assert!(matches!(rx.borrow().stage, PowerState::Running));
+    }
+
+    #[test]
+    fn last_resume_time_get_updated_when_system_resumes() {
+        let (tx, rx) = watch::channel(PowerStateInfo {
+            stage: PowerState::ShuttingDown,
+            last_resume_time: None,
+        });
+        let updater = PowerStateUpdater::new(tx);
+
+        updater.update(&PowerStateReport::ON).unwrap();
+        assert!(rx.borrow().last_resume_time.is_none());
+
+        updater.update(&PowerStateReport::SUSPEND_TO_RAM_EXIT).unwrap();
+        assert!(rx.borrow().last_resume_time.is_some());
     }
 }
