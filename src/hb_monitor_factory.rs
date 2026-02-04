@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::sb_monitor::ServiceBundleMonitor;
-use crate::service_bundle_manager::ServiceHealthConfig;
+use crate::hb_config::HeartbeatMonitoringConfig;
+use crate::hb_monitor::HeartbeatMonitor;
 use crate::{monitor_model::EntityMonitor, power_state::PowerStateReceiverFactory};
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -41,20 +41,20 @@ const HEARTBEAT_UNIT_TYPE_NAME: &str = "ServiceHeartbeat";
 
 #[automock]
 #[async_trait]
-pub trait ServiceBundleMonitorFactory: Send + Sync {
+pub trait HeartbeatMonitorFactory: Send + Sync {
     async fn new_monitor(
         &self,
         sb_fqin: &ServiceFqin,
-        config: ServiceHealthConfig,
+        config: HeartbeatMonitoringConfig,
     ) -> SdvResult<Box<dyn EntityMonitor>>;
 }
-pub struct ServiceBundleMonitorFactoryImpl {
+pub struct HeartbeatMonitorFactoryImpl {
     comms: Arc<dyn Communicate>,
     service_discovery: Arc<dyn ServiceUnitDefinitionDiscoverer>,
     power_state_receiver_factory: Arc<dyn PowerStateReceiverFactory>,
 }
 
-impl ServiceBundleMonitorFactoryImpl {
+impl HeartbeatMonitorFactoryImpl {
     pub fn new(
         comms: Arc<dyn Communicate>,
         service_discovery: Arc<dyn ServiceUnitDefinitionDiscoverer>,
@@ -97,12 +97,12 @@ impl ServiceBundleMonitorFactoryImpl {
 }
 
 #[async_trait]
-impl ServiceBundleMonitorFactory for ServiceBundleMonitorFactoryImpl {
+impl HeartbeatMonitorFactory for HeartbeatMonitorFactoryImpl {
     #[instrument(skip(self))]
     async fn new_monitor(
         &self,
         fqin: &ServiceFqin,
-        config: ServiceHealthConfig,
+        config: HeartbeatMonitoringConfig,
     ) -> SdvResult<Box<dyn EntityMonitor>> {
         let service_unit_name = self.find_heartbeat_publisher_service_unit_name(fqin).await?;
 
@@ -124,7 +124,7 @@ impl ServiceBundleMonitorFactory for ServiceBundleMonitorFactoryImpl {
         let subscriber_options = &SubscribeOptions::builder().read_on_subscribe(true).build()?;
         let untyped_stream = publication.observe(subscriber_options).await?;
         let typed_stream = observe::<ServiceHeartbeat>(Box::pin(untyped_stream));
-        Ok(Box::new(ServiceBundleMonitor::new(
+        Ok(Box::new(HeartbeatMonitor::new(
             typed_stream,
             config,
             Box::new(SystemTime::now),
@@ -228,7 +228,7 @@ mod tests {
     #[tokio::test]
     async fn test_new_monitor_success() {
         let fqin = ServiceFqin::from_str("vm:com.sdv.pkg.Bundle/instance").unwrap();
-        let config = ServiceHealthConfig {
+        let config = HeartbeatMonitoringConfig {
             initial_delay_ms: 0,
             period_ms: 0,
             num_periods: 0,
@@ -267,7 +267,7 @@ mod tests {
             let (_tx, rx) = watch::channel(PowerStateInfo::default());
             rx
         });
-        let factory = ServiceBundleMonitorFactoryImpl::new(
+        let factory = HeartbeatMonitorFactoryImpl::new(
             Arc::new(mock_comms),
             Arc::new(ServiceDiscoveryMock {}),
             Arc::new(mock_power_state_factory),

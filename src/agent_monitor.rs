@@ -63,8 +63,8 @@ pub struct AgentHealthMonitor<T: BinderInteraction> {
 }
 
 impl<T: BinderInteraction> AgentHealthMonitor<T> {
-    const DUMMY_CONFIG: crate::service_bundle_manager::ServiceHealthConfig =
-        crate::service_bundle_manager::ServiceHealthConfig {
+    const DUMMY_CONFIG: crate::hb_config::HeartbeatMonitoringConfig =
+        crate::hb_config::HeartbeatMonitoringConfig {
             initial_delay_ms: 0,
             period_ms: 0,
             num_periods: 0,
@@ -145,7 +145,7 @@ impl<T: BinderInteraction> Drop for AgentHealthMonitor<T> {
 }
 
 impl<T: BinderInteraction> EntityMonitor for AgentHealthMonitor<T> {
-    fn get_config(&self) -> &crate::service_bundle_manager::ServiceHealthConfig {
+    fn get_config(&self) -> &crate::hb_config::HeartbeatMonitoringConfig {
         error!(
             "AgentHealthMonitor is a special, default monitor. Check logic, this should never be called."
         );

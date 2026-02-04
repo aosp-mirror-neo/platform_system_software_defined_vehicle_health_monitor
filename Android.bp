@@ -72,6 +72,7 @@ rust_defaults {
         // HM uses ServiceFqin to communicate with Orch SB Recovery binder interface:
         "google.sdv.identity-V2-rust",
         "google.sdv.orchestration-rust",
+        "google.sdv.service_bundles_registry-V3-rust",
         "google.sdv.vpm-V1-rust",
         "libpersistent_binder",
         "libprotobuf",
@@ -114,7 +115,7 @@ rust_test {
         "libtokio_stream",
     ],
     data: [
-        "src/test_configs/*",
+        "src/test_configs/**/*",
     ],
     ld_flags: ["-Wl,--no-as-needed"],
     require_root: true,

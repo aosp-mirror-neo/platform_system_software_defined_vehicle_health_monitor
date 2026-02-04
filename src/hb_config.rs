@@ -14,8 +14,8 @@
 
 use health_api::health_config::HealthConfiguration;
 
-#[derive(Clone, PartialEq, Debug)]
-pub struct ServiceHealthConfig {
+#[derive(Clone, PartialEq, Debug, Default, Copy)]
+pub struct HeartbeatMonitoringConfig {
     // The time between the service start and its first heartbeat.
     pub initial_delay_ms: u64,
 
@@ -33,18 +33,18 @@ pub struct ServiceHealthConfig {
     pub task_duration_ms: u64,
 }
 
-impl ServiceHealthConfig {
-    /// Validates the provided `ServiceHealthConfig` to ensure all parameters are within acceptable ranges.
+impl HeartbeatMonitoringConfig {
+    /// Validates the provided `HeartbeatMonitoringConfig` to ensure all parameters are within acceptable ranges.
     ///
     /// # Arguments
     ///
-    /// * `health_config` - The `ServiceHealthConfig` to validate.
+    /// * `health_config` - The `HeartbeatMonitoringConfig` to validate.
     ///
     /// # Returns
     ///
     /// * `Ok(())` if the configuration is valid.
     /// * `Err(String)` if any parameter is invalid, with a descriptive error message.
-    fn validate_health_config(config: &ServiceHealthConfig) -> Result<(), String> {
+    fn validate_health_config(config: &HeartbeatMonitoringConfig) -> Result<(), String> {
         if config.period_ms == 0 {
             return Err("period_ms must be greater than 0 ms".to_string());
         }
@@ -56,7 +56,7 @@ impl ServiceHealthConfig {
     }
 }
 
-impl TryFrom<HealthConfiguration> for ServiceHealthConfig {
+impl TryFrom<HealthConfiguration> for HeartbeatMonitoringConfig {
     type Error = String;
     fn try_from(value: HealthConfiguration) -> Result<Self, Self::Error> {
         let config = Self {
@@ -65,13 +65,12 @@ impl TryFrom<HealthConfiguration> for ServiceHealthConfig {
             num_periods: value.num_periods.unwrap_or_default(),
             task_duration_ms: value.task_duration_ms.unwrap_or_default(),
         };
-        ServiceHealthConfig::validate_health_config(&config).map(|_| config)
+        HeartbeatMonitoringConfig::validate_health_config(&config).map(|_| config)
     }
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[test]
@@ -84,7 +83,7 @@ mod tests {
             ..Default::default()
         };
 
-        let service_health_config = ServiceHealthConfig::try_from(health_config);
+        let service_health_config = HeartbeatMonitoringConfig::try_from(health_config);
 
         assert!(service_health_config.is_ok());
 
@@ -105,7 +104,7 @@ mod tests {
             ..Default::default()
         };
 
-        let service_health_config = ServiceHealthConfig::try_from(health_config);
+        let service_health_config = HeartbeatMonitoringConfig::try_from(health_config);
 
         assert!(service_health_config.is_err());
         assert_eq!(service_health_config.unwrap_err(), "period_ms must be greater than 0 ms");
@@ -121,7 +120,7 @@ mod tests {
             ..Default::default()
         };
 
-        let service_health_config = ServiceHealthConfig::try_from(health_config);
+        let service_health_config = HeartbeatMonitoringConfig::try_from(health_config);
 
         assert!(service_health_config.is_err());
         assert_eq!(service_health_config.unwrap_err(), "num_periods must be greater than 0");

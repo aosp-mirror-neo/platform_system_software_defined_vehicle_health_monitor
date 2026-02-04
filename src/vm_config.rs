@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Implementation for Health Monitor Config.
-//!  - parsing of textproto config
+//! Implementation for Health Monitor global config retrieval and validation.
 
 use anyhow::anyhow;
 use health_api::health_monitor_config::{BinderServiceAgent, HealthMonitorConfiguration};
@@ -88,7 +87,7 @@ impl Default for Config {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::Config;
+    use crate::vm_config::Config;
     use googletest::prelude::*;
     use rustutils::android::system_properties::PropertyWatcherError;
 

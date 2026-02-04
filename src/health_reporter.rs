@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::message_publisher::MessagePublisher;
 use health_api::health_topic::VmHealth;
 use log::warn;
+use mockall::automock;
+use protobuf::Message;
+use sdv_mw_rs_comms::Publisher;
 use sdv_status_rs::SdvResult;
 use tracing::instrument;
 
@@ -40,10 +42,20 @@ impl HealthReporter {
     }
 }
 
+#[automock]
+pub trait MessagePublisher<M: Message>: Send {
+    fn publish(&self, data: &M) -> SdvResult<()>;
+}
+
+impl<M: Message> MessagePublisher<M> for Publisher<M> {
+    fn publish(&self, data: &M) -> SdvResult<()> {
+        Publisher::publish(self, data)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_publisher::MockMessagePublisher;
     use sdv_status_rs::SdvStatus;
     use sdv_status_rs::SdvStatusCode;
 

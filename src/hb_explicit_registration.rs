@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::async_trait;
+use crate::hb_config::HeartbeatMonitoringConfig;
 use crate::monitor_model::EntityMonitor;
-use crate::service_bundle_manager::ServiceHealthConfig;
 use crate::AuthorizationImpl;
-use crate::ServiceBundleMonitorFactory;
+use crate::HeartbeatMonitorFactory;
 use com_sdv_google_health_health_monitor_registration_service_rpc::Interface as HealthMonitorRegistrationService;
 use health_api::health_monitor_registration_service::{
     RegisterConfigurationRequest, RegisterConfigurationResponse, UnregisterConfigurationRequest,
@@ -26,10 +26,11 @@ use log::{info, warn};
 use sdv_comms::id::ServiceFqin;
 use sdv_status_rs::SdvStatus;
 use sdv_status_rs::SdvStatusCode;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tracing::instrument;
 
-pub enum RegistrationCommand {
+pub enum HBRegistrationCommand {
     Register(
         Box<ServiceFqin>,
         Box<dyn EntityMonitor>,
@@ -37,28 +38,30 @@ pub enum RegistrationCommand {
     ),
     Unregister(Box<ServiceFqin>, oneshot::Sender<()>),
 }
+
 #[derive(Debug)]
 pub enum RegistrationCommandError {
     AlreadyRegistered,
 }
 
-pub struct ServiceBundleRegistrationInterface {
-    sb_monitor_factory: Box<dyn ServiceBundleMonitorFactory>,
-    registration_commands_tx: std::sync::mpsc::Sender<RegistrationCommand>,
+pub struct HBRegistrationListener {
+    hb_monitor_factory: Box<dyn HeartbeatMonitorFactory>,
+    registration_commands_tx: mpsc::Sender<HBRegistrationCommand>,
     authorization: AuthorizationImpl,
 }
-impl ServiceBundleRegistrationInterface {
+
+impl HBRegistrationListener {
     pub fn new(
-        sb_monitor_factory: Box<dyn ServiceBundleMonitorFactory>,
-        registration_commands_tx: std::sync::mpsc::Sender<RegistrationCommand>,
+        hb_monitor_factory: Box<dyn HeartbeatMonitorFactory>,
+        registration_commands_tx: mpsc::Sender<HBRegistrationCommand>,
         authorization: AuthorizationImpl,
     ) -> Self {
-        Self { sb_monitor_factory, registration_commands_tx, authorization }
+        Self { hb_monitor_factory, registration_commands_tx, authorization }
     }
 }
 #[async_trait]
 #[allow(non_snake_case)]
-impl HealthMonitorRegistrationService for ServiceBundleRegistrationInterface {
+impl HealthMonitorRegistrationService for HBRegistrationListener {
     #[instrument(skip(self))]
     async fn RegisterConfiguration(
         &self,
@@ -84,15 +87,16 @@ impl HealthMonitorRegistrationService for ServiceBundleRegistrationInterface {
                 ))
             }
         };
-        let config = ServiceHealthConfig::try_from(config)
+        let config = HeartbeatMonitoringConfig::try_from(config)
             .map_err(|err| SdvStatus::with_message(SdvStatusCode::InvalidArgument, err.as_str()))?;
 
-        let sb_monitor = self.sb_monitor_factory.new_monitor(&fqin, config).await?;
+        let sb_monitor = self.hb_monitor_factory.new_monitor(&fqin, config).await?;
 
         info!("Queueing up register for fqin:{}", fqin);
         let (tx, rx) = oneshot::channel();
         self.registration_commands_tx
-            .send(RegistrationCommand::Register(Box::new(fqin), sb_monitor, tx))
+            .send(HBRegistrationCommand::Register(Box::new(fqin), sb_monitor, tx))
+            .await
             .or(Err(SdvStatus::with_message(
                 SdvStatusCode::Unknown,
                 "Health Reporter Registration Queue unexpectedly closed",
@@ -120,7 +124,8 @@ impl HealthMonitorRegistrationService for ServiceBundleRegistrationInterface {
         info!("Queueing up unregister for fqin:{}", fqin);
         let (tx, rx) = oneshot::channel();
         self.registration_commands_tx
-            .send(RegistrationCommand::Unregister(Box::new(fqin), tx))
+            .send(HBRegistrationCommand::Unregister(Box::new(fqin), tx))
+            .await
             .map_err(|_| {
                 let err = "Could not send deregistration command, queue dropped!";
                 warn!("{err}");
@@ -138,12 +143,14 @@ impl HealthMonitorRegistrationService for ServiceBundleRegistrationInterface {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sb_monitor_factory::MockServiceBundleMonitorFactory;
-    use crate::tests::MockEntityMonitor;
+    use crate::hb_monitor_factory::MockHeartbeatMonitorFactory;
+    use crate::monitor_model::test_utils::TestMonitor;
     use health_api::health_config::HealthConfiguration;
     use protobuf::MessageField;
     use std::str::FromStr;
     use std::sync::LazyLock;
+
+    use tokio::sync::mpsc;
 
     static HEALTH_MONITOR_FQIN: &str = "vm:com.google.sdv.HealthMonitorBundle/sample";
     static HEALTHY_SERVICE_FQIN_STR: &str = "vm:com.google.sdv.HealthyServiceBundle/sample";
@@ -159,19 +166,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_configuration_successful() {
-        let mut monitor_factory = MockServiceBundleMonitorFactory::new();
-        let service_config = ServiceHealthConfig::try_from(DEFAULT_VALID_CONFIG.clone()).unwrap();
-        monitor_factory.expect_new_monitor().returning(|_, _| {
-            let service_config =
-                ServiceHealthConfig::try_from(DEFAULT_VALID_CONFIG.clone()).unwrap();
-            let mut monitor = MockEntityMonitor::new();
-            monitor.expect_get_config().return_const(service_config);
-            Ok(Box::new(monitor))
-        });
+        let mut monitor_factory = MockHeartbeatMonitorFactory::new();
+        let valid_parsed_config =
+            HeartbeatMonitoringConfig::try_from(DEFAULT_VALID_CONFIG.clone()).unwrap();
+        let expected_monitor =
+            TestMonitor { config: valid_parsed_config, ..TestMonitor::default() };
+
+        monitor_factory.expect_new_monitor().returning(move |_, _| Ok(Box::new(expected_monitor)));
         let auth = AuthorizationImpl::new(ServiceFqin::from_str(HEALTH_MONITOR_FQIN).unwrap());
-        let (command_tx, command_rx) = std::sync::mpsc::channel();
-        let interface =
-            ServiceBundleRegistrationInterface::new(Box::new(monitor_factory), command_tx, auth);
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        let interface = HBRegistrationListener::new(Box::new(monitor_factory), command_tx, auth);
 
         let request = RegisterConfigurationRequest {
             config: MessageField::some(DEFAULT_VALID_CONFIG.clone()),
@@ -186,15 +190,17 @@ mod tests {
                 )
                 .await
         });
-        let monitor_task = tokio::task::spawn_blocking(move || match command_rx.recv().unwrap() {
-            RegistrationCommand::Register(fqin, m, oneshot_tx) => {
-                assert_eq!(fqin.to_string(), HEALTHY_SERVICE_FQIN_STR);
-                assert_eq!(*m.get_config(), service_config);
+        let monitor_task = tokio::task::spawn(async move {
+            match command_rx.recv().await.unwrap() {
+                HBRegistrationCommand::Register(fqin, m, oneshot_tx) => {
+                    assert_eq!(fqin.to_string(), HEALTHY_SERVICE_FQIN_STR);
+                    assert_eq!(*m.get_config(), valid_parsed_config);
 
-                oneshot_tx.send(Ok(())).unwrap();
-            }
-            RegistrationCommand::Unregister(_, _) => {
-                panic!("Unregister command not currently under test")
+                    oneshot_tx.send(Ok(())).unwrap();
+                }
+                HBRegistrationCommand::Unregister(_, _) => {
+                    panic!("Unregister command not currently under test")
+                }
             }
         });
         monitor_task.await.unwrap();
@@ -205,14 +211,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_error_correctly_propagated_from_health_monitor_to_rpc_response() {
-        let mut monitor_factory = MockServiceBundleMonitorFactory::new();
-        monitor_factory
-            .expect_new_monitor()
-            .returning(|_, _| Ok(Box::new(MockEntityMonitor::new())));
+        let mut monitor_factory = MockHeartbeatMonitorFactory::new();
+        monitor_factory.expect_new_monitor().returning(|_, _| Ok(Box::new(TestMonitor::default())));
         let auth = AuthorizationImpl::new(ServiceFqin::from_str(HEALTH_MONITOR_FQIN).unwrap());
-        let (command_tx, command_rx) = std::sync::mpsc::channel();
-        let interface =
-            ServiceBundleRegistrationInterface::new(Box::new(monitor_factory), command_tx, auth);
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        let interface = HBRegistrationListener::new(Box::new(monitor_factory), command_tx, auth);
 
         let request = RegisterConfigurationRequest {
             config: MessageField::some(DEFAULT_VALID_CONFIG.clone()),
@@ -227,12 +230,14 @@ mod tests {
                 )
                 .await
         });
-        let monitor_task = tokio::task::spawn_blocking(move || match command_rx.recv().unwrap() {
-            RegistrationCommand::Register(_, _, oneshot_tx) => {
-                oneshot_tx.send(Err(RegistrationCommandError::AlreadyRegistered)).unwrap();
-            }
-            RegistrationCommand::Unregister(_, _) => {
-                panic!("Unregister command not currently under test")
+        let monitor_task = tokio::task::spawn(async move {
+            match command_rx.recv().await.unwrap() {
+                HBRegistrationCommand::Register(_, _, oneshot_tx) => {
+                    oneshot_tx.send(Err(RegistrationCommandError::AlreadyRegistered)).unwrap();
+                }
+                HBRegistrationCommand::Unregister(_, _) => {
+                    panic!("Unregister command not currently under test")
+                }
             }
         });
         monitor_task.await.unwrap();
@@ -244,11 +249,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_configuration_missing_config() {
-        let monitor_factory = MockServiceBundleMonitorFactory::new();
+        let monitor_factory = MockHeartbeatMonitorFactory::new();
         let auth = AuthorizationImpl::new(ServiceFqin::from_str(HEALTH_MONITOR_FQIN).unwrap());
-        let (command_tx, _) = std::sync::mpsc::channel();
-        let interface =
-            ServiceBundleRegistrationInterface::new(Box::new(monitor_factory), command_tx, auth);
+        let (command_tx, _) = mpsc::channel(1);
+        let interface = HBRegistrationListener::new(Box::new(monitor_factory), command_tx, auth);
 
         let response = interface
             .RegisterConfiguration(
@@ -263,11 +267,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_configuration_invalid_config() {
-        let monitor_factory = MockServiceBundleMonitorFactory::new();
+        let monitor_factory = MockHeartbeatMonitorFactory::new();
         let auth = AuthorizationImpl::new(ServiceFqin::from_str(HEALTH_MONITOR_FQIN).unwrap());
-        let (command_tx, _) = std::sync::mpsc::channel();
-        let interface =
-            ServiceBundleRegistrationInterface::new(Box::new(monitor_factory), command_tx, auth);
+        let (command_tx, _) = mpsc::channel(1);
+        let interface = HBRegistrationListener::new(Box::new(monitor_factory), command_tx, auth);
 
         let request = RegisterConfigurationRequest {
             config: MessageField::some(HealthConfiguration {
@@ -290,11 +293,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_configuration_unauthorized_client() {
-        let monitor_factory = MockServiceBundleMonitorFactory::new();
+        let monitor_factory = MockHeartbeatMonitorFactory::new();
         let auth = AuthorizationImpl::new(ServiceFqin::from_str(HEALTH_MONITOR_FQIN).unwrap());
-        let (command_tx, _) = std::sync::mpsc::channel();
-        let interface =
-            ServiceBundleRegistrationInterface::new(Box::new(monitor_factory), command_tx, auth);
+        let (command_tx, _) = mpsc::channel(1);
+        let interface = HBRegistrationListener::new(Box::new(monitor_factory), command_tx, auth);
 
         let request = RegisterConfigurationRequest {
             config: MessageField::some(HealthConfiguration {
@@ -320,18 +322,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_unregister_configuration_successful() {
-        let monitor_factory = MockServiceBundleMonitorFactory::new();
+        let monitor_factory = MockHeartbeatMonitorFactory::new();
         let auth = AuthorizationImpl::new(ServiceFqin::from_str(HEALTH_MONITOR_FQIN).unwrap());
-        let (command_tx, command_rx) = std::sync::mpsc::channel();
-        let interface =
-            ServiceBundleRegistrationInterface::new(Box::new(monitor_factory), command_tx, auth);
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        let interface = HBRegistrationListener::new(Box::new(monitor_factory), command_tx, auth);
 
-        let monitor_task = tokio::task::spawn_blocking(move || match command_rx.recv().unwrap() {
-            RegistrationCommand::Register(_, _, _) => {
-                panic!("Register command not currently under test")
-            }
-            RegistrationCommand::Unregister(_, oneshot_tx) => {
-                oneshot_tx.send(()).unwrap();
+        let monitor_task = tokio::task::spawn(async move {
+            match command_rx.recv().await.unwrap() {
+                HBRegistrationCommand::Register(_, _, _) => {
+                    panic!("Register command not currently under test")
+                }
+                HBRegistrationCommand::Unregister(_, oneshot_tx) => {
+                    oneshot_tx.send(()).unwrap();
+                }
             }
         });
 
