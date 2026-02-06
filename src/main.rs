@@ -109,7 +109,7 @@ async fn setup_communication(
 ) -> anyhow::Result<(HealthMonitorServiceBundle, Box<dyn MessagePublisher<VmHealth>>)> {
     let context = create_context()?;
     let id = context.get_self_fqin();
-    dm.set_self_fqin(&id);
+    dm.set_self_fqin(id.to_string());
     dm.set_agent_state("FQIN retrieved");
     let authorization = AuthorizationImpl::new(id);
     let comms = Arc::new(SdvComms { context });

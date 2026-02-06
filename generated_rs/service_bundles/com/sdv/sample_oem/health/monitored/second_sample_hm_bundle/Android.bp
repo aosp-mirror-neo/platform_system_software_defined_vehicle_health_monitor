@@ -32,9 +32,11 @@ genrule {
 rust_library {
     name: "libsdv_mw_rs_com_sdv_sample_oem_health_monitored_second_sample_hm_bundle",
     crate_name: "sdv_mw_rs_com_sdv_sample_oem_health_monitored_second_sample_hm_bundle",
+    crate_root: ":libsdv_mw_rs_com_sdv_sample_oem_health_monitored_second_sample_hm_bundle_rs{service_bundle.rs}",
     srcs: [
-        ":libsdv_mw_rs_com_sdv_sample_oem_health_monitored_second_sample_hm_bundle_rs{service_bundle.rs}",
+        ":libsdv_mw_rs_com_sdv_sample_oem_health_monitored_second_sample_hm_bundle_rs",
     ],
+    use_expansive_default_srcs: false,
     rustlibs: [
         "libprotobuf",
         "liblog_rust",
