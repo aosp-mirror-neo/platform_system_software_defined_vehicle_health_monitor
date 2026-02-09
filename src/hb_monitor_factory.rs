@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use crate::hb_config::HeartbeatMonitoringConfig;
+use crate::hb_monitor::HeartbeatEvent;
 use crate::hb_monitor::HeartbeatMonitor;
+use crate::hb_stream_ops::into_heartbeats;
 use crate::{monitor_model::EntityMonitor, power_state::PowerStateReceiverFactory};
 use futures::stream;
 use futures::stream::StreamExt;
 use futures::Stream;
-use health_api::health_topic::ServiceHeartbeat;
 use mockall::automock;
 use sdv_comms::dt::SubscriberOptions;
 use sdv_comms::dt::SubscriberStream;
@@ -30,7 +31,6 @@ use sdv_comms::{
     id::ServiceFqin,
     sd::{ServiceDiscoveryManager, ServiceUnitDefinition, UnitType},
 };
-use sdv_mw_rs_comms::observe;
 use sdv_status_rs::SdvResult;
 use sdv_status_rs::SdvStatus;
 use std::future::{self, Future};
@@ -79,8 +79,7 @@ impl<T: Comms> HeartbeatMonitorFactory for HeartbeatMonitorFactoryImpl<T> {
 
         let sud_stream = T::subscribe_sud_registration_by_name(sd, query);
 
-        let sud_id = get_hb_sud_id_from_stream::<T>(sud_stream, fqin)?
-            .pipe(|id| with_timeout(id, Duration::from_millis(config.initial_delay_ms)));
+        let sud_id = get_hb_sud_id_from_stream::<T>(sud_stream, fqin)?.pipe(with_sanity_timeout);
 
         let stream = hb_sud_id_to_hb_stream::<T>(context, sud_id);
 
@@ -93,11 +92,23 @@ impl<T: Comms> HeartbeatMonitorFactory for HeartbeatMonitorFactoryImpl<T> {
     }
 }
 
-async fn with_timeout<T>(
-    f: impl Future<Output = SdvResult<T>>,
-    duration: Duration,
-) -> SdvResult<T> {
-    f.pipe(|f| timeout(duration, f))
+/// A timeout that is never expected to be hit under normal production circumstances.
+///
+/// ** explicit registration: SUD should be registered before RPC registration call. SUD propagation
+/// from SD to HM should be much faster than 2 seconds
+///
+/// ** implicit registration: bundle should create HB pub asynchronously, task launched as early
+/// as possible from on_start (TODO(tmot) mw code does this once vsidl integration).
+/// SUD propagation should be much faster than 2 seconds.
+///
+/// Yet, added for easier diagnosis of problems and developer experience: if HB monitor reports
+/// deadline exceeded, an issue exists with the heartbeat SUD registration, rather than with the
+/// heartbeat publication.
+///
+/// Internal, as if bundle developer follow guidelines, this timeout should never be reached.
+const SANITY_TIMEOUT: Duration = Duration::from_secs(2);
+async fn with_sanity_timeout<T>(f: impl Future<Output = SdvResult<T>>) -> SdvResult<T> {
+    f.pipe(|f| timeout(SANITY_TIMEOUT, f))
         .await
         .map_err(|_timeout| SdvStatus::new(sdv_status_rs::SdvStatusCode::DeadlineExceeded))
         .flatten()
@@ -134,7 +145,7 @@ fn get_hb_sud_id_from_stream<T: Comms>(
 fn hb_sud_id_to_hb_stream<T: Comms>(
     context: T::ContextRef,
     hb_sud_id: impl Future<Output = SdvResult<T::UnitIdentifier>> + Send,
-) -> impl Stream<Item = SdvResult<Vec<ServiceHeartbeat>>> + Send {
+) -> impl Stream<Item = SdvResult<HeartbeatEvent>> + Send {
     stream::once(hb_sud_id)
         .then(move |res| async move {
             match res {
@@ -151,7 +162,7 @@ fn hb_sud_id_to_hb_stream<T: Comms>(
             }
         })
         .map(|res| match res {
-            Ok(s) => s.pipe(Box::pin).pipe(|s| observe::<ServiceHeartbeat>(s)).left_stream(),
+            Ok(s) => s.pipe(Box::pin).pipe(|s| into_heartbeats(s)).left_stream(),
             Err(e) => stream::once(async { Err(e) }).right_stream(),
         })
         .flatten()
@@ -175,7 +186,6 @@ fn build_hb_unit_type() -> SdvResult<UnitType> {
         .set_unit_type_name(TYPE_NAME)
         .build()
 }
-
 pub struct CommsImpl;
 impl Comms for CommsImpl {
     type ContextRef = ContextRef;
@@ -270,13 +280,15 @@ pub trait Comms: 'static {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
+    use crate::hb_monitor::HeartbeatTrackEvent;
     use futures::stream;
+    use health_api::health_topic::ServiceHeartbeat;
     use protobuf::well_known_types::timestamp::Timestamp;
     use protobuf::Message;
     use protobuf::MessageField;
+    use std::str::FromStr;
+    use tokio::time;
 
     #[tokio::test]
     async fn test_hb_stream_valid_when_sud_return_succeeds_and_dt_stream_creation_succeeds() {
@@ -318,12 +330,39 @@ mod tests {
         // ACT
         let stream = hb_sud_id_to_hb_stream::<TestableComms>((), sud_future_returning_valid_sud);
         tokio::pin!(stream);
-        let res = stream.next().await;
+        let res1 = stream
+            .next()
+            .pipe(|f| time::timeout(Duration::from_millis(300), f))
+            .await
+            .unwrap()
+            .unwrap();
+        let res2 = stream
+            .next()
+            .pipe(|f| time::timeout(Duration::from_millis(300), f))
+            .await
+            .unwrap()
+            .unwrap();
 
-        // ASSERT: stream returns one valid HB
-        let data = &res.unwrap().unwrap()[0];
-        assert!(data.timestamp.clone().map(|t| t.seconds) == MessageField::some(HB_TIMESTAMP_S));
-        assert!(data.timestamp.clone().map(|t| t.nanos) == MessageField::some(HB_TIMESTAMP_NS));
+        // ASSERT: stream returns an initial Started monitoring event
+        assert!(matches!(
+            res1,
+            Ok(HeartbeatEvent::TrackingHeartbeat(HeartbeatTrackEvent::StartedMonitoring(_)))
+        ));
+
+        // ASSERT: stream returns a second event, with the heartbeat received from HB publication
+        let res2 = if let Ok(HeartbeatEvent::TrackingHeartbeat(
+            HeartbeatTrackEvent::ReceivedHearbeat(res2),
+        )) = res2
+        {
+            res2
+        } else {
+            panic!("stream did not return what we expected");
+        };
+
+        let expected =
+            Timestamp { seconds: HB_TIMESTAMP_S, nanos: HB_TIMESTAMP_NS, ..Default::default() };
+        let expected: SystemTime = Into::into(expected);
+        assert!(res2 == expected);
     }
 
     #[tokio::test]
@@ -395,14 +434,6 @@ mod tests {
         // ASSERT: stream produces an error: sud retrieval failed
         assert!(res.unwrap().is_err());
     }
-
-    /// TODO: tests that need adding:
-    /// 2. empty_sud_stream leads to a NotFound
-    /// 3. sud with wrong instance name leads to NotFound
-    /// 4. sud with wron
-    ///
-    ///
-
     struct SUD {
         fqin: ServiceFqin,
         unit_type: UnitType,

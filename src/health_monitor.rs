@@ -58,6 +58,7 @@ pub mod hb_explicit_registration;
 pub mod hb_implicit_monitoring_db;
 pub mod hb_monitor;
 pub mod hb_monitor_factory;
+mod hb_stream_ops;
 mod health_reporter;
 pub mod monitor_manager;
 pub mod monitor_model;
