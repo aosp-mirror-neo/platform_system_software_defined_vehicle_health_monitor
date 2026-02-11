@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::hb_config::HeartbeatMonitoringConfig;
-use sdv_comms::id::ServiceFqin;
 use sdv_dump::DumpStateReporter;
-use std::fmt::Display;
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum EntityHealthStatus {
@@ -31,59 +29,6 @@ pub trait EntityMonitor: DumpStateReporter {
 
 pub type AgentBinderId = String;
 pub type AgentName = String;
-
-#[derive(Debug, Hash, Eq, PartialEq)]
-pub enum MonitorId {
-    AgentMonitorId(AgentName),
-    BundleMonitorId(Box<ServiceFqin>), // boxed to reduce size difference between variants
-    BundleRecoveryMonitorId(Box<ServiceFqin>), // TODO: Unify with BundleMonitorId, currently performing HB monitoring
-}
-
-impl Display for MonitorId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MonitorId::AgentMonitorId(name) => write!(f, "Agent: {name}"),
-            MonitorId::BundleMonitorId(fqin) => write!(f, "FQIN: {fqin}"),
-            MonitorId::BundleRecoveryMonitorId(fqin) => {
-                write!(f, "FQIN: {fqin}")
-            }
-        }
-    }
-}
-
-// TODO: keep struct at least until Orch implements all instance states
-#[derive(Clone, Debug, PartialEq)]
-pub enum SBRecoveryState {
-    Normal,
-    Recovering,
-    FailedRecovery,
-    TerminatedClean,
-}
-
-impl EntityMonitor for SBRecoveryState {
-    fn get_health_status(&self) -> EntityHealthStatus {
-        match self {
-            SBRecoveryState::Normal => EntityHealthStatus::Healthy,
-            SBRecoveryState::Recovering => EntityHealthStatus::Healthy,
-            SBRecoveryState::TerminatedClean => EntityHealthStatus::Healthy,
-            SBRecoveryState::FailedRecovery => EntityHealthStatus::Unhealthy,
-        }
-    }
-
-    fn get_config(&self) -> &HeartbeatMonitoringConfig {
-        unimplemented!("This should never be called, it only applies to HB monitors.");
-    }
-}
-
-impl DumpStateReporter for SBRecoveryState {
-    fn dump(
-        &self,
-        writer: &mut dyn std::io::Write,
-        _args: &[&std::ffi::CStr],
-    ) -> Result<(), std::io::Error> {
-        writeln!(writer, "{self:?}")
-    }
-}
 
 #[cfg(test)]
 pub mod test_utils {

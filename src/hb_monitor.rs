@@ -17,17 +17,18 @@ use crate::monitor_model::EntityHealthStatus;
 use crate::monitor_model::EntityMonitor;
 use crate::power_state::PowerState;
 use crate::power_state::PowerStateInfo;
-use futures::future;
 use futures::stream;
+use futures::Stream;
 use futures::StreamExt;
 use health_api::health_topic::ServiceHeartbeat;
 use log::{error, warn};
-use protobuf::well_known_types::timestamp::Timestamp;
 use sdv_dump::DumpStateReporter;
 use sdv_status_rs::SdvResult;
+use sdv_status_rs::SdvStatus;
+use sdv_status_rs::SdvStatusCode;
 use std::cmp;
-use std::pin::Pin;
 use std::time::{Duration, SystemTime};
+use tap::prelude::*;
 use tokio::sync::watch;
 
 /// For backwards compatibility, logic uses SystemTime API.
@@ -48,9 +49,15 @@ impl HeartbeatEvent {
     }
 }
 
+impl From<HeartbeatMonitor> for Box<dyn EntityMonitor> {
+    fn from(value: HeartbeatMonitor) -> Self {
+        Box::new(value) as Box<dyn EntityMonitor>
+    }
+}
+
 pub struct HeartbeatMonitor {
     heartbeat_listener_task: tokio::task::JoinHandle<()>,
-    last_event: watch::Receiver<HeartbeatEvent>,
+    last_event: watch::Receiver<SdvResult<HeartbeatEvent>>,
     config: MonitorConfig,
     current_time_provider: Box<dyn Send + Sync + 'static + Fn() -> SystemTime>,
     power_state_receiver: watch::Receiver<PowerStateInfo>,
@@ -66,21 +73,20 @@ impl HeartbeatMonitor {
     pub fn new(
         heartbeat_publication: impl futures::stream::Stream<Item = SdvResult<Vec<ServiceHeartbeat>>>
             + Send
-            + Unpin
             + 'static,
         health_config: HeartbeatMonitoringConfig,
         current_time_provider: Box<dyn Fn() -> SystemTime + Send + Sync + 'static>,
         power_state_receiver: watch::Receiver<PowerStateInfo>,
     ) -> HeartbeatMonitor {
-        let (tx, rx) =
-            tokio::sync::watch::channel(HeartbeatEvent::StartedMonitoring(current_time_provider()));
+        let (tx, rx) = tokio::sync::watch::channel(Ok(HeartbeatEvent::StartedMonitoring(
+            current_time_provider(),
+        )));
         Self {
             heartbeat_listener_task: tokio::task::spawn(async move {
                 heartbeat_publication
                     .into_sanitized_heartbeats()
-                    .for_each(|hb| {
-                        tx.send_replace(HeartbeatEvent::ReceivedHearbeat(hb));
-                        future::ready(())
+                    .for_each(async |hb| {
+                        let _ = tx.send_replace(hb);
                     })
                     .await;
             }),
@@ -116,6 +122,14 @@ impl EntityMonitor for HeartbeatMonitor {
     }
 
     fn get_health_status(&self) -> EntityHealthStatus {
+        let last_event = match self.last_event.borrow().as_ref() {
+            Ok(event) => *event,
+            Err(err) => {
+                error!("HB stream, received error: {err:?}");
+                return EntityHealthStatus::Unhealthy;
+            }
+        };
+
         let last_suspend_time = {
             let power_state = *self.power_state_receiver.borrow();
             if power_state.stage == PowerState::Suspended {
@@ -124,7 +138,6 @@ impl EntityMonitor for HeartbeatMonitor {
             power_state.last_resume_time
         };
 
-        let last_event = *self.last_event.borrow();
         let hb_event_time = last_event.get_event_time();
         let current_time = (self.current_time_provider)();
         let allowed_delay = match last_event {
@@ -155,42 +168,36 @@ impl EntityMonitor for HeartbeatMonitor {
 trait HeartbeatStream {
     fn into_sanitized_heartbeats(
         self,
-    ) -> Pin<Box<dyn futures::stream::Stream<Item = SystemTime> + Send>>;
+    ) -> impl futures::stream::Stream<Item = SdvResult<HeartbeatEvent>> + Send;
 }
 
 impl<T> HeartbeatStream for T
 where
-    T: futures::stream::Stream<Item = SdvResult<Vec<ServiceHeartbeat>>> + Send + Unpin + 'static,
+    T: futures::stream::Stream<Item = SdvResult<Vec<ServiceHeartbeat>>> + Send,
 {
-    fn into_sanitized_heartbeats(
-        self,
-    ) -> Pin<Box<dyn futures::stream::Stream<Item = SystemTime> + Send>> {
-        let s = self
-            .filter_map(|r| async move {
-                if let Ok(hbs) = r {
-                    Some(hbs)
-                } else {
-                    warn!("Heartbeat stream unexpectedly returned {r:?}. Continuing monitoring.");
-                    None
-                }
-            })
-            .flat_map(stream::iter)
-            .map(|hb| hb.timestamp.unwrap_or_default().into())
-            .scan(Timestamp::default().into(), |last_hb, new_hb| {
-                let r = if new_hb >= *last_hb {
-                    *last_hb = new_hb;
-                    Some(Some(new_hb))
-                } else {
-                    warn!("Non monotonic clock issue: received out of order heartbeat. Ignoring.");
-                    Some(None)
-                };
-                future::ready(r)
-            })
-            .filter_map(future::ready);
-        Box::pin(s)
+    fn into_sanitized_heartbeats(self) -> impl Stream<Item = SdvResult<HeartbeatEvent>> + Send {
+        self.map(|res| match res {
+            Ok(v) => v.into_iter().map(TryInto::try_into).pipe(stream::iter).left_stream(),
+            Err(e) => stream::once(async { Err(e) }).right_stream(),
+        })
+        .flatten()
     }
 }
 
+impl TryFrom<ServiceHeartbeat> for HeartbeatEvent {
+    type Error = SdvStatus;
+
+    fn try_from(value: ServiceHeartbeat) -> Result<Self, Self::Error> {
+        value
+            .timestamp
+            .into_option()
+            .ok_or(SdvStatus::with_message(
+                SdvStatusCode::InvalidArgument,
+                "Missing timestamp".to_string(),
+            ))
+            .map(|timestamp| HeartbeatEvent::ReceivedHearbeat(timestamp.into()))
+    }
+}
 struct MonitorConfig {
     service_config: HeartbeatMonitoringConfig,
     allowed_delay_since_last_heartbeat: Duration,
@@ -216,12 +223,37 @@ impl From<HeartbeatMonitoringConfig> for MonitorConfig {
         }
     }
 }
+
+#[cfg(test)]
+impl HeartbeatMonitor {
+    /// Useful for waiting until async hb stream input was propagated, ensuring
+    /// reproductibility
+    async fn wait_for_hb_with_timeout(
+        &mut self,
+        expected_hb_event: &SdvResult<HeartbeatEvent>,
+    ) -> std::result::Result<(), ()> {
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            self.last_event.wait_for(|event| {
+                match (event, expected_hb_event) {
+                    (Ok(e1), Ok(e2)) => e1 == e2,
+                    (Err(status1), Err(status2)) => status1.status_code() == status2.status_code(),
+                    _ => false, // extend match statement if needed
+                }
+            }),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|_| ())
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use protobuf::well_known_types::timestamp::Timestamp;
     use protobuf::MessageField;
     use sdv_status_rs::{SdvStatus, SdvStatusCode};
+    use std::future;
     use std::time::SystemTime;
 
     mod utils {
@@ -250,31 +282,10 @@ mod tests {
 
         pub fn create_mock_controllable_hb_stream() -> (
             watch::Sender<Result<Vec<ServiceHeartbeat>, SdvStatusCode>>,
-            Pin<Box<dyn futures::stream::Stream<Item = SdvResult<Vec<ServiceHeartbeat>>> + Send>>,
+            impl futures::stream::Stream<Item = SdvResult<Vec<ServiceHeartbeat>>> + Send,
         ) {
             let (tx, rx) = watch::channel(Ok(vec![]));
-            (tx, Box::pin(WatchStream::from_changes(rx).map(|hbs| hbs.map_err(SdvStatus::new))))
-        }
-
-        impl HeartbeatMonitor {
-            /// Useful for waiting until async hb stream input was propagated, ensuring
-            /// reproductibility
-            pub async fn wait_for_hb_with_timeout(
-                &mut self,
-                expected_hb_event: &ServiceHeartbeat,
-            ) -> std::result::Result<(), ()> {
-                let expected_hb_event = HeartbeatEvent::ReceivedHearbeat(
-                    expected_hb_event.timestamp.clone().unwrap_or_default().into(),
-                );
-
-                tokio::time::timeout(
-                    Duration::from_secs(5),
-                    self.last_event.wait_for(|event| event == &expected_hb_event),
-                )
-                .await
-                .map(|_| ())
-                .map_err(|_| ())
-            }
+            (tx, WatchStream::from_changes(rx).map(|hbs| hbs.map_err(SdvStatus::new)))
         }
     }
 
@@ -412,7 +423,10 @@ mod tests {
             Box::new(move || mock_time.now()),
             rx,
         );
-        monitor.wait_for_hb_with_timeout(&hb).await.expect("HB should be received during timeout");
+        monitor
+            .wait_for_hb_with_timeout(&hb.try_into())
+            .await
+            .expect("HB should be received during timeout");
         assert!(monitor.get_health_status() == EntityHealthStatus::Unhealthy)
     }
 
@@ -444,7 +458,10 @@ mod tests {
             Box::new(move || mock_time.now()),
             rx,
         );
-        monitor.wait_for_hb_with_timeout(&hb).await.expect("HB should be received during timeout");
+        monitor
+            .wait_for_hb_with_timeout(&hb.try_into())
+            .await
+            .expect("HB should be received during timeout");
 
         assert!(monitor.get_health_status() == EntityHealthStatus::Healthy);
         assert!(monitor.get_health_status() == EntityHealthStatus::Unhealthy)
@@ -476,7 +493,10 @@ mod tests {
             Box::new(move || mock_time.now()),
             rx,
         );
-        monitor.wait_for_hb_with_timeout(&hb).await.expect("Expecting hb to arrive before timeout");
+        monitor
+            .wait_for_hb_with_timeout(&hb.try_into())
+            .await
+            .expect("Expecting hb to arrive before timeout");
 
         assert!(monitor.get_health_status() == EntityHealthStatus::Healthy)
     }
@@ -520,7 +540,10 @@ mod tests {
             Box::new(move || mock_time.now()),
             rx,
         );
-        monitor.wait_for_hb_with_timeout(&hb).await.expect("Did not receive hb in timeout");
+        monitor
+            .wait_for_hb_with_timeout(&hb.try_into())
+            .await
+            .expect("Did not receive hb in timeout");
 
         assert!(monitor.get_health_status() == EntityHealthStatus::Healthy);
         assert!(monitor.get_health_status() == EntityHealthStatus::Healthy);
@@ -567,7 +590,7 @@ mod tests {
             rx,
         );
         monitor
-            .wait_for_hb_with_timeout(&hb)
+            .wait_for_hb_with_timeout(&hb.try_into())
             .await
             .expect("Did not received expected hb in timeout");
 
@@ -612,7 +635,7 @@ mod tests {
             rx,
         );
         sender.send(Ok(vec![first_hb.clone()])).unwrap();
-        hb.wait_for_hb_with_timeout(&first_hb)
+        hb.wait_for_hb_with_timeout(&first_hb.try_into())
             .await
             .expect("timeout, first_hb not received by monitor internals");
 
@@ -620,7 +643,7 @@ mod tests {
         // registration, happens in initial_delay_ms interval
         assert!(hb.get_health_status() == EntityHealthStatus::Healthy);
         sender.send(Ok(vec![second_hb.clone()])).unwrap();
-        hb.wait_for_hb_with_timeout(&second_hb)
+        hb.wait_for_hb_with_timeout(&second_hb.try_into())
             .await
             .expect("timeout, first_hb not received by monitor internals");
 
@@ -632,11 +655,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn monitor_is_healthy_when_hb_stream_signals_data_loss() {
-        let final_hb = ServiceHeartbeat {
-            timestamp: MessageField::some(Timestamp { seconds: 0, nanos: 5, ..Default::default() }),
-            ..Default::default()
-        };
+    async fn monitor_is_unhealthy_when_hb_stream_signals_data_loss() {
         let hb_stream = stream::iter([
             Ok(vec![
                 ServiceHeartbeat {
@@ -657,17 +676,6 @@ mod tests {
                 },
             ]),
             Err(SdvStatus::new(SdvStatusCode::DataLoss)),
-            Ok(vec![
-                ServiceHeartbeat {
-                    timestamp: MessageField::some(Timestamp {
-                        seconds: 0,
-                        nanos: 4,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                final_hb.clone(),
-            ]),
         ]);
         let time_mock = utils::MockCurrentTimeProvider::new(vec![
             Timestamp { seconds: 0, nanos: 0, ..Default::default() }.into(),
@@ -687,11 +695,45 @@ mod tests {
             rx,
         );
         monitor
-            .wait_for_hb_with_timeout(&final_hb)
+            .wait_for_hb_with_timeout(&SdvResult::Err(SdvStatus::new(SdvStatusCode::DataLoss)))
             .await
             .expect("Did not receive hb during timeout");
 
-        assert!(monitor.get_health_status() == EntityHealthStatus::Healthy)
+        assert!(monitor.get_health_status() == EntityHealthStatus::Unhealthy)
+    }
+
+    #[tokio::test]
+    async fn monitor_is_unhealthy_when_hb_stream_sends_error_due_to_sud_discovery_timeout() {
+        let hb_stream = Err(SdvStatus::new(SdvStatusCode::DeadlineExceeded))
+            .pipe(future::ready)
+            .pipe(stream::once);
+        let time_mock = utils::MockCurrentTimeProvider::new(vec![Timestamp {
+            seconds: 0,
+            nanos: 0,
+            ..Default::default()
+        }
+        .into()]);
+
+        let (_tx, rx) = watch::channel(PowerStateInfo::default());
+        let mut monitor = HeartbeatMonitor::new(
+            hb_stream,
+            HeartbeatMonitoringConfig {
+                initial_delay_ms: 500,
+                period_ms: 100,
+                num_periods: 1,
+                task_duration_ms: 10,
+            },
+            Box::new(move || time_mock.now()),
+            rx,
+        );
+        monitor
+            .wait_for_hb_with_timeout(&SdvResult::Err(SdvStatus::new(
+                SdvStatusCode::DeadlineExceeded,
+            )))
+            .await
+            .expect("Did not receive hb during timeout");
+
+        assert!(monitor.get_health_status() == EntityHealthStatus::Unhealthy)
     }
 
     #[tokio::test]
@@ -726,6 +768,42 @@ mod tests {
             rx,
         );
         assert!(monitor.get_health_status() == EntityHealthStatus::Healthy);
+    }
+
+    #[tokio::test]
+    async fn monitor_recovers_when_hb_after_error_and_is_healthy() {
+        let healthy_hb = ServiceHeartbeat {
+            timestamp: MessageField::some(Timestamp { seconds: 0, nanos: 2, ..Default::default() }),
+            ..Default::default()
+        };
+
+        let hb_stream = stream::iter([
+            Err(SdvStatus::new(SdvStatusCode::DataLoss)),
+            Ok(vec![healthy_hb.clone()]),
+        ]);
+        let time_mock = utils::MockCurrentTimeProvider::new(vec![
+            Timestamp { seconds: 0, nanos: 0, ..Default::default() }.into(),
+            Timestamp { seconds: 0, nanos: 100, ..Default::default() }.into(),
+        ]);
+
+        let (_tx, rx) = watch::channel(PowerStateInfo::default());
+        let mut monitor = HeartbeatMonitor::new(
+            hb_stream,
+            HeartbeatMonitoringConfig {
+                initial_delay_ms: 500,
+                period_ms: 100,
+                num_periods: 1,
+                task_duration_ms: 10,
+            },
+            Box::new(move || time_mock.now()),
+            rx,
+        );
+        monitor
+            .wait_for_hb_with_timeout(&healthy_hb.try_into())
+            .await
+            .expect("Did not receive hb during timeout");
+
+        assert!(monitor.get_health_status() == EntityHealthStatus::Healthy)
     }
 
     #[tokio::test]
@@ -819,7 +897,10 @@ mod tests {
             Box::new(move || mock_time.now()),
             rx,
         );
-        monitor.wait_for_hb_with_timeout(&hb).await.expect("HB should be received during timeout");
+        monitor
+            .wait_for_hb_with_timeout(&hb.try_into())
+            .await
+            .expect("HB should be received during timeout");
 
         assert!(monitor.get_health_status() == EntityHealthStatus::Healthy)
     }
@@ -869,7 +950,10 @@ mod tests {
             Box::new(move || mock_time.now()),
             rx,
         );
-        monitor.wait_for_hb_with_timeout(&hb).await.expect("HB should be received during timeout");
+        monitor
+            .wait_for_hb_with_timeout(&hb.try_into())
+            .await
+            .expect("HB should be received during timeout");
 
         assert!(monitor.get_health_status() == EntityHealthStatus::Unhealthy);
     }

@@ -15,265 +15,478 @@
 use crate::hb_config::HeartbeatMonitoringConfig;
 use crate::hb_monitor::HeartbeatMonitor;
 use crate::{monitor_model::EntityMonitor, power_state::PowerStateReceiverFactory};
-use async_trait::async_trait;
+use futures::stream;
 use futures::stream::StreamExt;
 use futures::Stream;
 use health_api::health_topic::ServiceHeartbeat;
 use mockall::automock;
+use sdv_comms::dt::SubscriberOptions;
+use sdv_comms::dt::SubscriberStream;
+use sdv_comms::id::UnitIdentifier;
+use sdv_comms::sd::ServiceUnitChangeEvent;
+use sdv_comms::sd::UnitNameDiscoveryArgs;
+use sdv_comms::ContextRef;
 use sdv_comms::{
     id::ServiceFqin,
     sd::{ServiceDiscoveryManager, ServiceUnitDefinition, UnitType},
 };
 use sdv_mw_rs_comms::observe;
-use sdv_mw_rs_comms::UnitName;
-use sdv_mw_rs_comms::UnitQuery;
-use sdv_mw_rs_comms::{Communicate, SubscribeOptions};
 use sdv_status_rs::SdvResult;
 use sdv_status_rs::SdvStatus;
-use std::pin::Pin;
+use std::future::{self, Future};
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::SystemTime;
-use tracing::{info_span, instrument, Instrument};
-
-const HEARTBEAT_UNIT_TYPE_PACKAGE: &str = "com.sdv.google.health";
-const HEARTBEAT_UNIT_TYPE_BUNDLE: &str = "HealthMonitorServiceBundle";
-const HEARTBEAT_UNIT_TYPE_NAME: &str = "ServiceHeartbeat";
+use tap::prelude::*;
+use tokio::time::timeout;
 
 #[automock]
-#[async_trait]
-pub trait HeartbeatMonitorFactory: Send + Sync {
-    async fn new_monitor(
+pub trait HeartbeatMonitorFactory: Send + Sync + 'static {
+    /// creates monitor. Does not assume the HB sud is already registered, rather waits
+    /// asunchronously for a duration specified by configuration.
+    /// Creation is done synchronously. Any waits for sd apis are delegated to the HB monitor
+    fn new_monitor(
         &self,
-        sb_fqin: &ServiceFqin,
+        fqin: &ServiceFqin,
         config: HeartbeatMonitoringConfig,
     ) -> SdvResult<Box<dyn EntityMonitor>>;
 }
-pub struct HeartbeatMonitorFactoryImpl {
-    comms: Arc<dyn Communicate>,
-    service_discovery: Arc<dyn ServiceUnitDefinitionDiscoverer>,
+pub struct HeartbeatMonitorFactoryImpl<T: Comms> {
+    context: T::ContextRef,
+    service_discovery: Arc<T::ServiceDiscoveryManager>,
     power_state_receiver_factory: Arc<dyn PowerStateReceiverFactory>,
 }
 
-impl HeartbeatMonitorFactoryImpl {
+impl<T: Comms> HeartbeatMonitorFactoryImpl<T> {
     pub fn new(
-        comms: Arc<dyn Communicate>,
-        service_discovery: Arc<dyn ServiceUnitDefinitionDiscoverer>,
+        context: T::ContextRef,
+        service_discovery: T::ServiceDiscoveryManager,
         power_state_receiver_factory: Arc<dyn PowerStateReceiverFactory>,
     ) -> Self {
-        Self { comms, service_discovery, power_state_receiver_factory }
-    }
-
-    #[instrument(skip(self))]
-    async fn find_heartbeat_publisher_service_unit_name(
-        &self,
-        service_fqin: &ServiceFqin,
-    ) -> SdvResult<String> {
-        let unit_type = UnitType::builder()
-            .set_sdv_package_name(HEARTBEAT_UNIT_TYPE_PACKAGE)
-            .set_service_bundle_name(HEARTBEAT_UNIT_TYPE_BUNDLE)
-            .set_unit_type_name(HEARTBEAT_UNIT_TYPE_NAME)
-            .build()?;
-
-        let list_sud_span =
-            info_span!("health_monitor::heartbeat_monitor_factory::list_sud").entered();
-        let mut service_units_stream = self.service_discovery.list_by_type(&unit_type);
-        list_sud_span.exit();
-
-        while let Some(service_unit) = service_units_stream
-            .next()
-            .instrument(info_span!("health_monitor::heartbeat_monitor_factory::list_single_sud"))
-            .await
-        {
-            if service_unit.get_owning_fqin() == *service_fqin {
-                return Ok(service_unit.get_unit_name());
-            }
-        }
-
-        Err(SdvStatus::with_message(
-            sdv_status_rs::SdvStatusCode::NotFound,
-            format!("Could not find any service units for {service_fqin}"),
-        ))
+        Self { context, service_discovery: service_discovery.into(), power_state_receiver_factory }
     }
 }
 
-#[async_trait]
-impl HeartbeatMonitorFactory for HeartbeatMonitorFactoryImpl {
-    #[instrument(skip(self))]
-    async fn new_monitor(
+impl<T: Comms> HeartbeatMonitorFactory for HeartbeatMonitorFactoryImpl<T> {
+    fn new_monitor(
         &self,
         fqin: &ServiceFqin,
         config: HeartbeatMonitoringConfig,
     ) -> SdvResult<Box<dyn EntityMonitor>> {
-        let service_unit_name = self.find_heartbeat_publisher_service_unit_name(fqin).await?;
+        let context = self.context;
+        let query = build_sd_query_for_all_suds_of_fqin(fqin)?;
+        let sd = Arc::clone(&self.service_discovery);
 
-        let unit_name_query = &UnitQuery::Name(
-            UnitName::builder()
-                .vm_name(fqin.get_sdv_vm_name())
-                .package_name(fqin.get_sdv_package_name())
-                .bundle_name(fqin.get_service_bundle_name())
-                .instance_name(fqin.get_service_instance_name())
-                .service_unit_name(service_unit_name)
-                .build()?,
-        );
+        let sud_stream = T::subscribe_sud_registration_by_name(sd, query);
 
-        let publication_future = self.comms.find_publication(unit_name_query);
-        let publication = publication_future
-            .instrument(info_span!("health_monitor::heartbeat_monitor_factory::find_publication"))
-            .await?;
+        let sud_id = get_hb_sud_id_from_stream::<T>(sud_stream, fqin)?
+            .pipe(|id| with_timeout(id, Duration::from_millis(config.initial_delay_ms)));
 
-        let subscriber_options = &SubscribeOptions::builder().read_on_subscribe(true).build()?;
-        let untyped_stream = publication.observe(subscriber_options).await?;
-        let typed_stream = observe::<ServiceHeartbeat>(Box::pin(untyped_stream));
+        let stream = hb_sud_id_to_hb_stream::<T>(context, sud_id);
+
         Ok(Box::new(HeartbeatMonitor::new(
-            typed_stream,
+            stream,
             config,
             Box::new(SystemTime::now),
             self.power_state_receiver_factory.create_receiver(),
-        )))
+        )) as Box<dyn EntityMonitor>)
     }
 }
 
-/// Interface to ServiceUnitDefinition functionality, allowing unit testing
-pub trait SudProvider: Send {
-    fn get_unit_name(&self) -> String;
-    fn get_owning_fqin(&self) -> ServiceFqin;
+async fn with_timeout<T>(
+    f: impl Future<Output = SdvResult<T>>,
+    duration: Duration,
+) -> SdvResult<T> {
+    f.pipe(|f| timeout(duration, f))
+        .await
+        .map_err(|_timeout| SdvStatus::new(sdv_status_rs::SdvStatusCode::DeadlineExceeded))
+        .flatten()
 }
 
-impl SudProvider for ServiceUnitDefinition {
-    fn get_unit_name(&self) -> String {
-        self.get_unit_identifier().get_unit_name().to_owned()
+/// function assumption: sud_stream input only contains SUDs owned by the bundle of interest
+fn get_hb_sud_id_from_stream<T: Comms>(
+    sud_stream: impl Future<Output = SdvResult<impl Stream<Item = T::ServiceUnitDefinition> + Send + Unpin>>
+        + Send
+        + 'static,
+    fqin: &ServiceFqin,
+) -> SdvResult<impl Future<Output = SdvResult<T::UnitIdentifier>> + Send> {
+    let hb_unit_type = build_hb_unit_type()?;
+    let owned_instance_name = fqin.get_service_instance_name().to_string();
+    async move {
+        sud_stream
+            .await?
+            .filter(|sud| future::ready(T::get_unit_type(sud) == hb_unit_type))
+            .map(|sud| T::get_unit_identifier(&sud))
+            .filter(|sud_id| {
+                future::ready(
+                    T::get_owning_fqin(sud_id).get_service_instance_name() == owned_instance_name,
+                )
+            })
+            .next()
+            .await
+            .ok_or(SdvStatus::new(sdv_status_rs::SdvStatusCode::NotFound))
     }
-    fn get_owning_fqin(&self) -> ServiceFqin {
-        self.get_service_bundle_identity().get_fqin().clone()
+    .pipe(Ok)
+}
+
+/// Constructs stream of hearbeats from a HB sud future *synchronously*: the initial future
+/// is polled by the consumer of the constructed stream
+fn hb_sud_id_to_hb_stream<T: Comms>(
+    context: T::ContextRef,
+    hb_sud_id: impl Future<Output = SdvResult<T::UnitIdentifier>> + Send,
+) -> impl Stream<Item = SdvResult<Vec<ServiceHeartbeat>>> + Send {
+    stream::once(hb_sud_id)
+        .then(move |res| async move {
+            match res {
+                Ok(id) => {
+                    T::create_untyped_stream(
+                        context,
+                        id,
+                        Duration::ZERO,
+                        SubscriberOptions { fetch_last_message: true },
+                    )
+                    .await
+                }
+                Err(e) => Err(e),
+            }
+        })
+        .map(|res| match res {
+            Ok(s) => s.pipe(Box::pin).pipe(|s| observe::<ServiceHeartbeat>(s)).left_stream(),
+            Err(e) => stream::once(async { Err(e) }).right_stream(),
+        })
+        .flatten()
+}
+
+fn build_sd_query_for_all_suds_of_fqin(fqin: &ServiceFqin) -> SdvResult<UnitNameDiscoveryArgs> {
+    UnitNameDiscoveryArgs::new_builder()
+        .set_sdv_vm_name(fqin.get_sdv_vm_name())
+        .set_sdv_package_name(fqin.get_sdv_package_name())
+        .set_service_bundle_name(fqin.get_service_bundle_name())
+        .build()
+}
+
+fn build_hb_unit_type() -> SdvResult<UnitType> {
+    const PACKAGE: &str = "com.sdv.google.health";
+    const BUNDLE: &str = "HealthMonitorServiceBundle";
+    const TYPE_NAME: &str = "ServiceHeartbeat";
+    UnitType::builder()
+        .set_sdv_package_name(PACKAGE)
+        .set_service_bundle_name(BUNDLE)
+        .set_unit_type_name(TYPE_NAME)
+        .build()
+}
+
+pub struct CommsImpl;
+impl Comms for CommsImpl {
+    type ContextRef = ContextRef;
+    type UnitIdentifier = UnitIdentifier;
+    type ServiceUnitDefinition = ServiceUnitDefinition;
+    type ServiceDiscoveryManager = ServiceDiscoveryManager;
+
+    async fn subscribe_sud_registration_by_name(
+        sd: Arc<ServiceDiscoveryManager>,
+        name_args: UnitNameDiscoveryArgs,
+    ) -> SdvResult<impl Stream<Item = Self::ServiceUnitDefinition> + Send + Unpin + 'static> {
+        sd.subscribe_service_unit_change_by_name(&name_args)
+            .await?
+            .filter_map(|event| {
+                let sud = if let ServiceUnitChangeEvent::Registered(sud) = event {
+                    Some(sud)
+                } else {
+                    None
+                };
+                future::ready(sud)
+            })
+            .pipe(Ok)
+    }
+
+    async fn create_untyped_stream(
+        context: ContextRef,
+        id: Self::UnitIdentifier,
+        duration: Duration,
+        options: SubscriberOptions,
+    ) -> SdvResult<impl futures::Stream<Item = SdvResult<(u32, std::vec::Vec<u8>)>> + Send + 'static>
+    {
+        SubscriberStream::create(context, &id, duration, options).await
+    }
+
+    fn get_owning_fqin(id: &Self::UnitIdentifier) -> &ServiceFqin {
+        id.get_fqin()
+    }
+
+    fn get_unit_identifier(sud: &Self::ServiceUnitDefinition) -> Self::UnitIdentifier {
+        sud.get_unit_identifier()
+    }
+
+    fn get_unit_type(sud: &Self::ServiceUnitDefinition) -> UnitType {
+        sud.get_unit_type()
     }
 }
 
-/// Interface to ServiceDiscoveryManager functionality, allowing unit testing
-pub trait ServiceUnitDefinitionDiscoverer: Send + Sync {
-    fn list_by_type(
-        &self,
-        unit_type: &UnitType,
-    ) -> Pin<Box<dyn Stream<Item = Box<dyn SudProvider>> + Send>>;
-}
-impl ServiceUnitDefinitionDiscoverer for ServiceDiscoveryManager {
-    fn list_by_type(
-        &self,
-        unit_type: &UnitType,
-    ) -> Pin<Box<dyn Stream<Item = Box<dyn SudProvider>> + Send>> {
-        Box::pin(
-            self.list_units_by_type(unit_type).map(|sud| Box::new(sud) as Box<dyn SudProvider>),
-        )
+pub trait Comms: 'static {
+    type ContextRef: Send + Sync + Copy;
+    type UnitIdentifier: Send + Sync;
+    type ServiceUnitDefinition: Send + Sync;
+    type ServiceDiscoveryManager: Send + Sync;
+
+    #[allow(unreachable_code)]
+    fn subscribe_sud_registration_by_name(
+        _sd: Arc<Self::ServiceDiscoveryManager>,
+        _name_args: UnitNameDiscoveryArgs,
+    ) -> impl Future<
+        Output = SdvResult<
+            impl Stream<Item = Self::ServiceUnitDefinition> + Send + Unpin + 'static,
+        >,
+    > + Send {
+        unimplemented!("subscribe_sud_registration_bu_name unimplemented!");
+        stream::empty().pipe(Ok).pipe(future::ready)
+    }
+
+    #[allow(unreachable_code)]
+    fn create_untyped_stream(
+        _context: Self::ContextRef,
+        _id: Self::UnitIdentifier,
+        _duration: Duration,
+        _options: SubscriberOptions,
+    ) -> impl Future<
+        Output = SdvResult<impl Stream<Item = SdvResult<(u32, Vec<u8>)>> + Send + 'static>,
+    > + Send {
+        async {
+            unimplemented!("create_untyped_stream unimplemented!");
+            stream::empty().pipe(Ok)
+        }
+    }
+
+    fn get_owning_fqin(_id: &Self::UnitIdentifier) -> &ServiceFqin {
+        unimplemented!("get_owning_fqin unimplemented!")
+    }
+    fn get_unit_identifier(_sud: &Self::ServiceUnitDefinition) -> Self::UnitIdentifier {
+        unimplemented!("get_unit_identifier unimplemented!")
+    }
+    fn get_unit_type(_sud: &Self::ServiceUnitDefinition) -> UnitType {
+        unimplemented!("get_unit_type unimplemented!")
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::power_state::MockPowerStateReceiverFactory;
-    use crate::power_state::PowerStateInfo;
-    use futures::stream;
-    use mockall::mock;
-    use mockall::predicate::eq;
-    use sdv_mw_rs_comms::ByteBuffersStream;
-    use sdv_mw_rs_comms::InstantRead;
-    use sdv_mw_rs_comms::MockCommunicate;
-    use sdv_mw_rs_comms::Publication;
-    use sdv_mw_rs_comms::ReadHistory;
-    use sdv_mw_rs_comms::Subscribe;
-    use sdv_mw_rs_comms::SubscribeOptions;
     use std::str::FromStr;
-    use tokio::sync::watch;
 
-    const MONITORED_FQIN_VM: &str = "vm";
-    const MONITORED_FQIN_PACKAGE: &str = "com.sdv.pkg";
-    const MONITORED_FQIN_BUNDLE: &str = "Bundle";
-    const MONITORED_FQIN_INSTANCE: &str = "instance";
-    const CUSTOM_UNIT_NAME: &str = "my_unit_name";
+    use super::*;
+    use futures::stream;
+    use protobuf::well_known_types::timestamp::Timestamp;
+    use protobuf::Message;
+    use protobuf::MessageField;
 
-    mock! {
-        pub Publication {} // mock type name: MockPublication
-        #[async_trait::async_trait]
-        impl Publication for Publication{
-            async fn subscribe(&self, options: &SubscribeOptions) -> SdvResult<Box<dyn Subscribe>>;
-            async fn observe(&self, options: &SubscribeOptions) -> SdvResult<ByteBuffersStream>;
-            async fn create_history(&self, options: &SubscribeOptions) -> SdvResult<Box<dyn ReadHistory>>;
-            fn create_instant_read(&self) -> Box<dyn InstantRead>;
+    #[tokio::test]
+    async fn test_hb_stream_valid_when_sud_return_succeeds_and_dt_stream_creation_succeeds() {
+        //SETUP
+        const HB_TIMESTAMP_S: i64 = 33i64;
+        const HB_TIMESTAMP_NS: i32 = 44i32;
+
+        struct TestableComms;
+        impl Comms for TestableComms {
+            type ContextRef = ();
+            type UnitIdentifier = ();
+            type ServiceUnitDefinition = ();
+            type ServiceDiscoveryManager = ();
+
+            /// creates stream of one Heartbeat (mocking case where dt stream is created successfully)
+            async fn create_untyped_stream(
+                _context: Self::ContextRef,
+                _id: Self::UnitIdentifier,
+                _duration: Duration,
+                _options: SubscriberOptions,
+            ) -> SdvResult<impl Stream<Item = SdvResult<(u32, Vec<u8>)>> + Send + 'static>
+            {
+                let hb = ServiceHeartbeat {
+                    timestamp: MessageField::some(Timestamp {
+                        seconds: HB_TIMESTAMP_S,
+                        nanos: HB_TIMESTAMP_NS,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
+                let wire = hb.write_length_delimited_to_bytes().unwrap();
+
+                let nr_of_hearbeats = 1u32;
+                (nr_of_hearbeats, wire).pipe(Ok).pipe(future::ready).pipe(stream::once).pipe(Ok)
+            }
         }
+        let sud_future_returning_valid_sud = future::ready(Ok(()));
+
+        // ACT
+        let stream = hb_sud_id_to_hb_stream::<TestableComms>((), sud_future_returning_valid_sud);
+        tokio::pin!(stream);
+        let res = stream.next().await;
+
+        // ASSERT: stream returns one valid HB
+        let data = &res.unwrap().unwrap()[0];
+        assert!(data.timestamp.clone().map(|t| t.seconds) == MessageField::some(HB_TIMESTAMP_S));
+        assert!(data.timestamp.clone().map(|t| t.nanos) == MessageField::some(HB_TIMESTAMP_NS));
     }
 
-    struct SUDMock {}
-    impl SudProvider for SUDMock {
-        fn get_unit_name(&self) -> String {
-            CUSTOM_UNIT_NAME.to_owned()
-        }
+    #[tokio::test]
+    async fn test_hb_stream_produces_errors_when_sud_return_succeeds_but_dt_stream_creation_fails()
+    {
+        // SETUP
+        struct CommsDtStreamCreationError;
+        impl Comms for CommsDtStreamCreationError {
+            type ContextRef = ();
+            type UnitIdentifier = ();
+            type ServiceUnitDefinition = ();
+            type ServiceDiscoveryManager = ();
 
-        fn get_owning_fqin(&self) -> ServiceFqin {
-            ServiceFqin::from_str(&format!(
-                "{MONITORED_FQIN_VM}:{MONITORED_FQIN_PACKAGE}.{MONITORED_FQIN_BUNDLE}/{MONITORED_FQIN_INSTANCE}"
-            ))
-            .unwrap()
+            async fn create_untyped_stream(
+                _context: Self::ContextRef,
+                _id: Self::UnitIdentifier,
+                _duration: Duration,
+                _options: SubscriberOptions,
+            ) -> SdvResult<impl Stream<Item = SdvResult<(u32, Vec<u8>)>> + Send + 'static>
+            {
+                Err::<stream::Pending<_>, _>(SdvStatus::new(sdv_status_rs::SdvStatusCode::NotFound))
+            }
         }
+        let sud_future_returning_valid_sud = future::ready(Ok(()));
+
+        // ACT
+        let stream = hb_sud_id_to_hb_stream::<CommsDtStreamCreationError>(
+            (),
+            sud_future_returning_valid_sud,
+        );
+        tokio::pin!(stream);
+        let res = stream.next().await;
+
+        // ASSERT: stream produces an error, although sud was retrieved, as create raw dt stream failed
+        assert!(res.unwrap().is_err());
     }
 
-    struct ServiceDiscoveryMock;
-    impl ServiceUnitDefinitionDiscoverer for ServiceDiscoveryMock {
-        fn list_by_type(
-            &self,
-            _: &UnitType,
-        ) -> Pin<Box<dyn Stream<Item = Box<dyn SudProvider>> + Send>> {
-            Box::pin(stream::iter([Box::new(SUDMock {}) as Box<dyn SudProvider>]))
+    #[tokio::test]
+    async fn test_hb_stream_produces_error_when_sud_return_fails() {
+        // SETUP
+        struct CommsDtStreamCreationError;
+        impl Comms for CommsDtStreamCreationError {
+            type ContextRef = ();
+            type UnitIdentifier = ();
+            type ServiceUnitDefinition = ();
+            type ServiceDiscoveryManager = ();
+
+            async fn create_untyped_stream(
+                _context: Self::ContextRef,
+                _id: Self::UnitIdentifier,
+                _duration: Duration,
+                _options: SubscriberOptions,
+            ) -> SdvResult<impl Stream<Item = SdvResult<(u32, Vec<u8>)>> + Send + 'static>
+            {
+                Err::<stream::Pending<_>, _>(SdvStatus::new(sdv_status_rs::SdvStatusCode::NotFound))
+            }
+        }
+        let sud_future_returning_error = future::ready(Err(SdvStatus::with_message(
+            sdv_status_rs::SdvStatusCode::DeadlineExceeded,
+            "Error due to timeout waiting for SUD to be registered, for example",
+        )));
+
+        // ACT
+        let stream =
+            hb_sud_id_to_hb_stream::<CommsDtStreamCreationError>((), sud_future_returning_error);
+        tokio::pin!(stream);
+        let res = stream.next().await;
+
+        // ASSERT: stream produces an error: sud retrieval failed
+        assert!(res.unwrap().is_err());
+    }
+
+    /// TODO: tests that need adding:
+    /// 2. empty_sud_stream leads to a NotFound
+    /// 3. sud with wrong instance name leads to NotFound
+    /// 4. sud with wron
+    ///
+    ///
+
+    struct SUD {
+        fqin: ServiceFqin,
+        unit_type: UnitType,
+    }
+    struct SimpleCommsSUDOnly;
+    impl Comms for SimpleCommsSUDOnly {
+        type ContextRef = ();
+        type UnitIdentifier = ((), ServiceFqin);
+        type ServiceUnitDefinition = SUD;
+        type ServiceDiscoveryManager = ();
+
+        fn get_owning_fqin(id: &Self::UnitIdentifier) -> &ServiceFqin {
+            &id.1
+        }
+        fn get_unit_identifier(sud: &Self::ServiceUnitDefinition) -> Self::UnitIdentifier {
+            ((), sud.fqin.clone())
+        }
+        fn get_unit_type(sud: &Self::ServiceUnitDefinition) -> UnitType {
+            sud.unit_type.clone()
         }
     }
 
     #[tokio::test]
-    async fn test_new_monitor_success() {
-        let fqin = ServiceFqin::from_str("vm:com.sdv.pkg.Bundle/instance").unwrap();
-        let config = HeartbeatMonitoringConfig {
-            initial_delay_ms: 0,
-            period_ms: 0,
-            num_periods: 0,
-            task_duration_ms: 0,
-        };
+    async fn sud_retrieved_when_sud_stream_contains_sud_with_right_instance_and_right_type() {
+        let fqin_str: &str = "vm:com.sdv.pkg.Bundle/instance";
+        let fqin = ServiceFqin::from_str(fqin_str).unwrap();
 
-        let mut mock_comms = MockCommunicate::new();
-        let mut mock_publication = MockPublication::new();
+        let sud = SUD { fqin: fqin.clone(), unit_type: build_hb_unit_type().unwrap() };
+        let sud_stream = sud.pipe(future::ready).pipe(stream::once).pipe(Ok).pipe(future::ready);
+        let sud_id = get_hb_sud_id_from_stream::<SimpleCommsSUDOnly>(sud_stream, &fqin);
 
-        mock_publication
-            .expect_observe()
-            .with(eq(SubscribeOptions::builder().read_on_subscribe(true).build().unwrap()))
-            .times(1)
-            .return_once(|_| Ok(Box::pin(stream::pending::<SdvResult<(u32, Vec<u8>)>>())));
+        assert!(sud_id.is_ok());
+        let sud_id = sud_id.unwrap().await;
+        assert!(sud_id.is_ok());
+    }
 
-        mock_comms
-            .expect_find_publication()
-            .withf(move |query: &UnitQuery| {
-                let expected_name = UnitName::builder()
-                    .vm_name(MONITORED_FQIN_VM)
-                    .package_name(MONITORED_FQIN_PACKAGE)
-                    .bundle_name(MONITORED_FQIN_BUNDLE)
-                    .instance_name(MONITORED_FQIN_INSTANCE)
-                    .service_unit_name(CUSTOM_UNIT_NAME)
-                    .build()
-                    .unwrap();
-                query == &UnitQuery::Name(expected_name)
-            })
-            .times(1)
-            .return_once(|_| {
-                Box::pin(async { Ok(Arc::new(mock_publication) as Arc<dyn Publication>) })
-            });
+    #[tokio::test]
+    async fn sud_not_found_when_sud_stream_contains_sud_from_wrong_instance() {
+        let fqin: &str = "vm:com.sdv.pkg.Bundle/instance";
+        let fqin = ServiceFqin::from_str(fqin).unwrap();
 
-        let mut mock_power_state_factory = MockPowerStateReceiverFactory::new();
-        mock_power_state_factory.expect_create_receiver().times(1).return_once(|| {
-            let (_tx, rx) = watch::channel(PowerStateInfo::default());
-            rx
-        });
-        let factory = HeartbeatMonitorFactoryImpl::new(
-            Arc::new(mock_comms),
-            Arc::new(ServiceDiscoveryMock {}),
-            Arc::new(mock_power_state_factory),
-        );
+        let other_fqin: &str = "vm:com.sdv.pkg.Bundle/otherinstance";
+        let other_fqin = ServiceFqin::from_str(other_fqin).unwrap();
 
-        let r = factory.new_monitor(&fqin, config).await;
-        assert!(r.is_ok());
+        let sud = SUD { fqin: other_fqin, unit_type: build_hb_unit_type().unwrap() };
+        let sud_stream = sud.pipe(future::ready).pipe(stream::once).pipe(Ok).pipe(future::ready);
+        let sud_id = get_hb_sud_id_from_stream::<SimpleCommsSUDOnly>(sud_stream, &fqin);
+
+        assert!(sud_id.is_ok());
+        let sud_id = sud_id.unwrap().await;
+        assert!(sud_id.is_err());
+    }
+
+    #[tokio::test]
+    async fn sud_not_found_when_sud_stream_contains_sud_with_wrong_type() {
+        let fqin: &str = "vm:com.sdv.pkg.Bundle/instance";
+        let fqin = ServiceFqin::from_str(fqin).unwrap();
+
+        let wrong_type = UnitType::builder()
+            .set_sdv_package_name("com.sdv.google.health")
+            .set_service_bundle_name("HealthMonitorServiceBundle")
+            .set_unit_type_name("ServiceHeartbreak")
+            .build()
+            .unwrap();
+
+        let sud = SUD { fqin: fqin.clone(), unit_type: wrong_type };
+        let sud_stream = sud.pipe(future::ready).pipe(stream::once).pipe(Ok).pipe(future::ready);
+        let sud_id = get_hb_sud_id_from_stream::<SimpleCommsSUDOnly>(sud_stream, &fqin);
+
+        assert!(sud_id.is_ok());
+        let sud_id = sud_id.unwrap().await;
+        assert!(sud_id.is_err());
+    }
+
+    #[tokio::test]
+    async fn sud_not_found_when_sud_stream_is_empty() {
+        let fqin_str: &str = "vm:com.sdv.pkg.Bundle/instance";
+        let fqin = ServiceFqin::from_str(fqin_str).unwrap();
+
+        let sud_stream = stream::empty().pipe(Ok).pipe(future::ready);
+        let sud_id = get_hb_sud_id_from_stream::<SimpleCommsSUDOnly>(sud_stream, &fqin);
+
+        assert!(sud_id.is_ok());
+        let sud_id = sud_id.unwrap().await;
+        assert!(sud_id.is_err());
     }
 }

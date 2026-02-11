@@ -60,7 +60,10 @@ impl Config {
         let config = text_format::parse_from_str::<HealthMonitorConfiguration>(&config_textproto)
             .map_err(|e| anyhow!(e.to_string()))?;
         if config.period_ms < 1 {
-            return Err(anyhow!("Period for publishing VM health report should be a positive integer number, provided {} ms", config.period_ms));
+            return Err(anyhow!(
+                "Period for publishing VM health report should be a positive integer number, provided {} ms",
+                config.period_ms
+            ));
         }
         info!(
             "Successfully parsed health monitor config proto. Reporting timeout is {:?} ms",
