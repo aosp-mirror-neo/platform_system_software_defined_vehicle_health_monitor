@@ -53,6 +53,7 @@ use tracing::instrument;
 
 pub mod agent_monitor;
 pub mod authorization;
+pub mod commstack_trait;
 mod hb_config;
 pub mod hb_explicit_registration;
 pub mod hb_implicit_monitoring_db;
