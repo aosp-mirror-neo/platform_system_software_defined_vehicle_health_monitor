@@ -97,7 +97,7 @@ impl MonitorManager {
                 if current != Some(SBLifecycleState::Started) =>
             {
                 config_db
-                    .get_sb_instance_config(&incoming_event.fqin)
+                    .get_implicit_hb_config(&incoming_event.fqin)
                     .await
                     .unwrap_or_else(|e| {
                         error!("Error {e:?} in implicit config retrieval");
@@ -110,7 +110,7 @@ impl MonitorManager {
                 SBLifecycleState::Created | SBLifecycleState::Destroyed,
                 SBRecoveryState::Normal,
             ) => config_db
-                .get_sb_instance_config(&incoming_event.fqin)
+                .get_implicit_hb_config(&incoming_event.fqin)
                 .await
                 .unwrap_or_else(|e| {
                     error!("Error {e:?} in implicit config retrieval");
@@ -298,7 +298,9 @@ mod tests {
 
     mod recovery_monitor_management_tests {
         use super::*;
-        use crate::hb_config::HeartbeatMonitoringConfig;
+        use crate::{
+            hb_config::HeartbeatMonitoringConfig, hb_implicit_monitoring_db::InstanceConfig,
+        };
         use std::time::Duration;
         use tokio::time::timeout;
 
@@ -322,7 +324,10 @@ mod tests {
 
             let config_db = ImplicitMonitoringConfigRepo::new_for_testing(HashMap::from([(
                 fqin.clone(),
-                HeartbeatMonitoringConfig::default(),
+                InstanceConfig {
+                    hb_config: Some(HeartbeatMonitoringConfig::default()),
+                    qos_config: HashMap::new(),
+                },
             )]));
             let empty_config_db = ImplicitMonitoringConfigRepo::new_for_testing(HashMap::default());
 

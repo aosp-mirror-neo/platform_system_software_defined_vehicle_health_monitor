@@ -23,7 +23,8 @@ package com.android.sdv.health;
 // Message describing VM Health.
 message VmHealth {
   option (.sdv.vsidl.v1.publication) = {
-    // The size of the topic depends on the frequency of the health reports which is configurable by
+    // The size of the topic depends on the frequency of the health reports
+    // which is configurable by
     // the OEM.
     // DT should keep the data for at least 1 second, which results in
     // - 100 messages for reporting every 10 ms
@@ -35,18 +36,21 @@ message VmHealth {
     model: MULTI_PUB
   };
   // Required.
-  // Describes if all monitored service bundles are healthy and report heartbeats on time.
+  // Describes if all monitored service bundles are healthy and report
+  // heartbeats on time.
   bool all_monitored_service_bundles_healthy = 1;
 
   // Required.
-  // Describes if all service bundles which should be currently running on the VM are alive.
+  // Describes if all service bundles which should be currently running on the
+  // VM are alive.
   bool all_service_bundles_alive = 2;
 }
 
 // Topic describing health of a monitored SDV service bundle.
 message ServiceHeartbeat {
   option (.sdv.vsidl.v1.publication) = {
-    // The size of the topic depends on the frequency of service heartbeats which is configurable by
+    // The size of the topic depends on the frequency of service heartbeats
+    // which is configurable by
     // the OEM.
     // DT should keep the data for at least 1 second, which results in
     // - 100 messages for reporting every 10 ms

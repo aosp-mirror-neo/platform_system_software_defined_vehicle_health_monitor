@@ -21,6 +21,7 @@ use google_sdv_service_bundles_registry::aidl::google::sdv::service_bundles_regi
 use health_api::health_config::ServiceBundleHealthConfiguration;
 use log::{error, info, warn};
 use protobuf::text_format::parse_from_str;
+use tap::Pipe;
 use sdv_comms::id::ServiceFqin;
 use sdv_status_rs::{SdvResult, SdvStatus, SdvStatusCode};
 use std::collections::HashMap;
@@ -28,14 +29,20 @@ use std::fs::File;
 use std::io::Read;
 use std::time::Duration;
 use tokio::sync::OnceCell;
+use health_api::health_config::QosMonitoringConfiguration;
 
-pub struct ImplicitMonitoringConfigRepo(OnceCell<HashMap<ServiceFqin, HeartbeatMonitoringConfig>>);
+pub struct InstanceConfig {
+    pub hb_config: Option<HeartbeatMonitoringConfig>,
+    pub qos_config: HashMap<String, QosMonitoringConfiguration>, // key: topic, value: QosMonitoringConfiguration
+}
+
+pub struct ImplicitMonitoringConfigRepo(OnceCell<HashMap<ServiceFqin, InstanceConfig>>);
 
 impl ImplicitMonitoringConfigRepo {
-    pub async fn get_sb_instance_config(
+    async fn get_sb_instance_config(
         &self,
         fqin: &ServiceFqin,
-    ) -> SdvResult<Option<HeartbeatMonitoringConfig>> {
+    ) -> SdvResult<Option<&InstanceConfig>> {
         Ok(self
             .0
             .get_or_try_init(|| async {
@@ -48,8 +55,21 @@ impl ImplicitMonitoringConfigRepo {
                 })
             })
             .await?
-            .get(fqin)
-            .copied())
+            .get(fqin))
+    }
+
+    pub async fn get_implicit_hb_config(
+        &self,
+        fqin: &ServiceFqin,
+    ) -> SdvResult<Option<HeartbeatMonitoringConfig>> {
+        self.get_sb_instance_config(fqin).await?.and_then(|c| c.hb_config).pipe(Ok)
+    }
+
+    pub async fn get_qos_config(
+        &self,
+        fqin: &ServiceFqin,
+    ) -> SdvResult<Option<&HashMap<String, QosMonitoringConfiguration>>> {
+        self.get_sb_instance_config(fqin).await?.map(|c| &c.qos_config).pipe(Ok)
     }
 
     #[allow(clippy::new_without_default)]
@@ -61,7 +81,7 @@ impl ImplicitMonitoringConfigRepo {
 /// NOTE: might block thread. Use separate run_blocking
 fn retrieve_implicit_health_config_from_sbr(
     get_bundle_metadata: impl FnOnce() -> Vec<ServiceBundleMetadata>,
-) -> HashMap<ServiceFqin, HeartbeatMonitoringConfig> {
+) -> HashMap<ServiceFqin, InstanceConfig> {
     get_bundle_metadata()
         .into_iter()
         .filter_map(|metadata| {
@@ -102,7 +122,7 @@ fn retrieve_implicit_health_config_from_sbr(
         .collect()
 }
 
-fn parse_bundle_health_config(path: &str) -> SdvResult<HashMap<String, HeartbeatMonitoringConfig>> {
+fn parse_bundle_health_config(path: &str) -> SdvResult<HashMap<String, InstanceConfig>> {
     let mut file = File::open(path).map_err(|e| {
         SdvStatus::with_message(SdvStatusCode::Internal, format!("File open error: {e}"))
     })?;
@@ -120,7 +140,16 @@ fn parse_bundle_health_config(path: &str) -> SdvResult<HashMap<String, Heartbeat
         })?
         .instance_config
         .into_iter()
-        .filter_map(|(k, conf)| Some((k, HeartbeatMonitoringConfig::try_from(conf).ok()?)))
+        .map(|(fqin, conf)| {
+            (
+                fqin,
+                conf.health_config
+                    .into_option()
+                    .and_then(|hc| HeartbeatMonitoringConfig::try_from(hc).ok()),
+                conf.qos_config,
+            )
+        })
+        .map(|(k, hb_config, qos_config)| (k, InstanceConfig { hb_config, qos_config }))
         .collect::<HashMap<_, _>>();
 
     if !map.is_empty() {
@@ -178,7 +207,7 @@ pub mod tests {
         use super::*;
 
         impl ImplicitMonitoringConfigRepo {
-            pub fn new_for_testing(inner: HashMap<ServiceFqin, HeartbeatMonitoringConfig>) -> Self {
+            pub fn new_for_testing(inner: HashMap<ServiceFqin, InstanceConfig>) -> Self {
                 Self(OnceCell::new_with(Some(inner)))
             }
         }
@@ -196,7 +225,10 @@ pub mod tests {
 
         let db = ImplicitMonitoringConfigRepo(OnceCell::new_with(Some(HashMap::from([(
             fqin.clone(),
-            HeartbeatMonitoringConfig::default(),
+            InstanceConfig {
+                hb_config: Some(HeartbeatMonitoringConfig::default()),
+                qos_config: HashMap::default(),
+            },
         )]))));
 
         assert!(db.get_sb_instance_config(&fqin).await.unwrap().is_some())
@@ -226,6 +258,27 @@ pub mod tests {
 
         assert!(res.contains_key("instance1"));
         assert!(res.contains_key("instance2"));
+    }
+
+    #[test]
+    fn test_parse_health_config_from_path_when_file_valid_qos_only() {
+        let res = parse_bundle_health_config(
+            "src/test_configs/implicit_per_bundle_health_configs/valid_qos_only.textproto",
+        )
+        .expect("Expecting parsing successful, as textproto is valid");
+
+        assert!(res.contains_key("instance1"));
+        let qos_config = &res.get("instance1").unwrap().qos_config;
+        assert_eq!(qos_config.len(), 2);
+
+        let qos_config_first_unit = qos_config.get("my-qos-topic-name-1").unwrap();
+        let qos_config_second_unit = qos_config.get("my-qos-topic-name-2").unwrap();
+
+        assert!(qos_config_first_unit.qos_period_threshold_ms.is_some());
+        assert!(qos_config_first_unit.qos_latency_threshold_ms.is_none());
+
+        assert!(qos_config_second_unit.qos_period_threshold_ms.is_some());
+        assert!(qos_config_second_unit.qos_latency_threshold_ms.is_some());
     }
 
     #[test]
