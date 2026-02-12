@@ -15,10 +15,10 @@
 
 use std::sync::Arc;
 
-use com_sdv_google_health_health_monitor_service_rpc::Client as HealthMonitorClient;
+use com_android_sdv_health_health_monitor_service_rpc::Client as HealthMonitorClient;
 use health_api::health_topic::VmHealth;
 use sdv_comms::{id::ServiceFqin, ContextRef};
-use sdv_mw_rs_com_sdv_sample_oem_health_monitoring_vm_hm_bundle::{
+use sdv_mw_rs_com_android_sdv_sample_oem_health_monitoring_vm_hm_bundle::{
     subscriber::Variant, VmHMBundle,
 };
 use sdv_mw_rs_comms::{ClientOptions, RpcClient, SubscribeOptions, Subscriber, UnitName};
@@ -39,7 +39,7 @@ impl VmMonitoringService {
         let hm_client: HealthMonitorClient = bundle
             .create_rpc_client::<HealthMonitorClient>(
                 UnitName::builder()
-                    .package_name("com.sdv.google.health")
+                    .package_name("com.android.sdv.health")
                     .bundle_name("HealthMonitorServiceBundle")
                     .service_unit_name(HealthMonitorClient::DEFAULT_UNIT_NAME)
                     .build()
@@ -55,7 +55,7 @@ impl VmMonitoringService {
     async fn new_service_bundle() -> VmHMBundle {
         let fqin = ServiceFqin::builder()
             .sdv_vm_name("vm")
-            .sdv_package_name("com.sdv.sample_oem.health.monitoring")
+            .sdv_package_name("com.android.sdv.sample.oem.health.monitoring")
             .service_bundle_name("VmHMBundle")
             .service_instance_name("instance1")
             .build()

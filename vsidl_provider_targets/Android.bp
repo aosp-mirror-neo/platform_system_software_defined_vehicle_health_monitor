@@ -22,21 +22,21 @@ package {
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
-// Pre-compiled file with VSIDL schemas for com.sdv.google.health.
+// Pre-compiled file with VSIDL schemas for com.android.sdv.health.
 //
-// Usage: add the following line to com.sdv.google.health manifest declaration
+// Usage: add the following line to com.android.sdv.health manifest declaration
 // for each service bundle that is using this shared file:
 // + vsidl_schemas_path: "etc/vsidl_provider/vsidl-config.binpb"
 prebuilt_etc {
-    name: "com.sdv.google.health-vsidl-config.binpb",
+    name: "com.android.sdv.health-vsidl-config.binpb",
     filename: "vsidl-config.binpb",
     sub_dir: "vsidl_provider",
-    src: ":generate_vsidl_files_single_apex_com.sdv.google.health{vsidl-config.binpb}",
+    src: ":generate_vsidl_files_single_apex_com.android.sdv.health{vsidl-config.binpb}",
     installable: false,
 }
 
 genrule {
-    name: "generate_vsidl_files_single_apex_com.sdv.google.health",
+    name: "generate_vsidl_files_single_apex_com.android.sdv.health",
     tools: ["vsidl_rc_generator"],
     srcs: [
         ":sdv_v1_catalog_files",
@@ -47,27 +47,27 @@ genrule {
         " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
-        " --package-name com.sdv.google.health",
+        " --package-name com.android.sdv.health",
     out: [
         "vsidl-config.binpb",
     ],
 }
 
-// Pre-compiled file with VSIDL schemas for com.sdv.sample_oem.health.monitored.
+// Pre-compiled file with VSIDL schemas for com.android.sdv.sample.oem.health.monitored.
 //
-// Usage: add the following line to com.sdv.sample_oem.health.monitored manifest declaration
+// Usage: add the following line to com.android.sdv.sample.oem.health.monitored manifest declaration
 // for each service bundle that is using this shared file:
 // + vsidl_schemas_path: "etc/vsidl_provider/vsidl-config.binpb"
 prebuilt_etc {
-    name: "com.sdv.sample_oem.health.monitored-vsidl-config.binpb",
+    name: "com.android.sdv.sample.oem.health.monitored-vsidl-config.binpb",
     filename: "vsidl-config.binpb",
     sub_dir: "vsidl_provider",
-    src: ":generate_vsidl_files_single_apex_com.sdv.sample_oem.health.monitored{vsidl-config.binpb}",
+    src: ":generate_vsidl_files_single_apex_com.android.sdv.sample.oem.health.monitored{vsidl-config.binpb}",
     installable: false,
 }
 
 genrule {
-    name: "generate_vsidl_files_single_apex_com.sdv.sample_oem.health.monitored",
+    name: "generate_vsidl_files_single_apex_com.android.sdv.sample.oem.health.monitored",
     tools: ["vsidl_rc_generator"],
     srcs: [
         ":sdv_v1_catalog_files",
@@ -78,27 +78,27 @@ genrule {
         " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
-        " --package-name com.sdv.sample_oem.health.monitored",
+        " --package-name com.android.sdv.sample.oem.health.monitored",
     out: [
         "vsidl-config.binpb",
     ],
 }
 
-// Pre-compiled file with VSIDL schemas for com.sdv.sample_oem.health.monitoring.
+// Pre-compiled file with VSIDL schemas for com.android.sdv.sample.oem.health.monitoring.
 //
-// Usage: add the following line to com.sdv.sample_oem.health.monitoring manifest declaration
+// Usage: add the following line to com.android.sdv.sample.oem.health.monitoring manifest declaration
 // for each service bundle that is using this shared file:
 // + vsidl_schemas_path: "etc/vsidl_provider/vsidl-config.binpb"
 prebuilt_etc {
-    name: "com.sdv.sample_oem.health.monitoring-vsidl-config.binpb",
+    name: "com.android.sdv.sample.oem.health.monitoring-vsidl-config.binpb",
     filename: "vsidl-config.binpb",
     sub_dir: "vsidl_provider",
-    src: ":generate_vsidl_files_single_apex_com.sdv.sample_oem.health.monitoring{vsidl-config.binpb}",
+    src: ":generate_vsidl_files_single_apex_com.android.sdv.sample.oem.health.monitoring{vsidl-config.binpb}",
     installable: false,
 }
 
 genrule {
-    name: "generate_vsidl_files_single_apex_com.sdv.sample_oem.health.monitoring",
+    name: "generate_vsidl_files_single_apex_com.android.sdv.sample.oem.health.monitoring",
     tools: ["vsidl_rc_generator"],
     srcs: [
         ":sdv_v1_catalog_files",
@@ -109,27 +109,27 @@ genrule {
         " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
-        " --package-name com.sdv.sample_oem.health.monitoring",
+        " --package-name com.android.sdv.sample.oem.health.monitoring",
     out: [
         "vsidl-config.binpb",
     ],
 }
 
-// Pre-compiled file with VSIDL schemas for com.sdv.google.health.HealthMonitorServiceBundle.
+// Pre-compiled file with VSIDL schemas for com.android.sdv.health.HealthMonitorServiceBundle.
 //
-// DEPRECATED: you should use "com.sdv.google.health-vsidl-config.binpb" prebuilt_etc instead
-// Usage: add the following line to com.sdv.google.health.HealthMonitorServiceBundle manifest declaration:
+// DEPRECATED: you should use "com.android.sdv.health-vsidl-config.binpb" prebuilt_etc instead
+// Usage: add the following line to com.android.sdv.health.HealthMonitorServiceBundle manifest declaration:
 // + vsidl_schemas_path: "etc/vsidl_provider/HealthMonitorServiceBundle-vsidl-config.binpb"
 prebuilt_etc {
-    name: "com.sdv.google.health.HealthMonitorServiceBundle-vsidl-config.binpb",
+    name: "com.android.sdv.health.HealthMonitorServiceBundle-vsidl-config.binpb",
     filename: "HealthMonitorServiceBundle-vsidl-config.binpb",
     sub_dir: "vsidl_provider",
-    src: ":generate_vsidl_files_single_bundle_com.sdv.google.health.HealthMonitorServiceBundle{vsidl-config.binpb}",
+    src: ":generate_vsidl_files_single_bundle_com.android.sdv.health.HealthMonitorServiceBundle{vsidl-config.binpb}",
     installable: false,
 }
 
 genrule {
-    name: "generate_vsidl_files_single_bundle_com.sdv.google.health.HealthMonitorServiceBundle",
+    name: "generate_vsidl_files_single_bundle_com.android.sdv.health.HealthMonitorServiceBundle",
     tools: ["vsidl_rc_generator"],
     srcs: [
         ":sdv_v1_catalog_files",
@@ -140,28 +140,28 @@ genrule {
         " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
-        " --package-name com.sdv.google.health" +
+        " --package-name com.android.sdv.health" +
         " --service-bundle-name HealthMonitorServiceBundle",
     out: [
         "vsidl-config.binpb",
     ],
 }
 
-// Pre-compiled file with VSIDL schemas for com.sdv.google.health.FakeBundle.
+// Pre-compiled file with VSIDL schemas for com.android.sdv.health.FakeBundle.
 //
-// DEPRECATED: you should use "com.sdv.google.health-vsidl-config.binpb" prebuilt_etc instead
-// Usage: add the following line to com.sdv.google.health.FakeBundle manifest declaration:
+// DEPRECATED: you should use "com.android.sdv.health-vsidl-config.binpb" prebuilt_etc instead
+// Usage: add the following line to com.android.sdv.health.FakeBundle manifest declaration:
 // + vsidl_schemas_path: "etc/vsidl_provider/FakeBundle-vsidl-config.binpb"
 prebuilt_etc {
-    name: "com.sdv.google.health.FakeBundle-vsidl-config.binpb",
+    name: "com.android.sdv.health.FakeBundle-vsidl-config.binpb",
     filename: "FakeBundle-vsidl-config.binpb",
     sub_dir: "vsidl_provider",
-    src: ":generate_vsidl_files_single_bundle_com.sdv.google.health.FakeBundle{vsidl-config.binpb}",
+    src: ":generate_vsidl_files_single_bundle_com.android.sdv.health.FakeBundle{vsidl-config.binpb}",
     installable: false,
 }
 
 genrule {
-    name: "generate_vsidl_files_single_bundle_com.sdv.google.health.FakeBundle",
+    name: "generate_vsidl_files_single_bundle_com.android.sdv.health.FakeBundle",
     tools: ["vsidl_rc_generator"],
     srcs: [
         ":sdv_v1_catalog_files",
@@ -172,28 +172,28 @@ genrule {
         " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
-        " --package-name com.sdv.google.health" +
+        " --package-name com.android.sdv.health" +
         " --service-bundle-name FakeBundle",
     out: [
         "vsidl-config.binpb",
     ],
 }
 
-// Pre-compiled file with VSIDL schemas for com.sdv.sample_oem.health.monitored.SampleHMBundle.
+// Pre-compiled file with VSIDL schemas for com.android.sdv.sample.oem.health.monitored.SampleHMBundle.
 //
-// DEPRECATED: you should use "com.sdv.sample_oem.health.monitored-vsidl-config.binpb" prebuilt_etc instead
-// Usage: add the following line to com.sdv.sample_oem.health.monitored.SampleHMBundle manifest declaration:
+// DEPRECATED: you should use "com.android.sdv.sample.oem.health.monitored-vsidl-config.binpb" prebuilt_etc instead
+// Usage: add the following line to com.android.sdv.sample.oem.health.monitored.SampleHMBundle manifest declaration:
 // + vsidl_schemas_path: "etc/vsidl_provider/SampleHMBundle-vsidl-config.binpb"
 prebuilt_etc {
-    name: "com.sdv.sample_oem.health.monitored.SampleHMBundle-vsidl-config.binpb",
+    name: "com.android.sdv.sample.oem.health.monitored.SampleHMBundle-vsidl-config.binpb",
     filename: "SampleHMBundle-vsidl-config.binpb",
     sub_dir: "vsidl_provider",
-    src: ":generate_vsidl_files_single_bundle_com.sdv.sample_oem.health.monitored.SampleHMBundle{vsidl-config.binpb}",
+    src: ":generate_vsidl_files_single_bundle_com.android.sdv.sample.oem.health.monitored.SampleHMBundle{vsidl-config.binpb}",
     installable: false,
 }
 
 genrule {
-    name: "generate_vsidl_files_single_bundle_com.sdv.sample_oem.health.monitored.SampleHMBundle",
+    name: "generate_vsidl_files_single_bundle_com.android.sdv.sample.oem.health.monitored.SampleHMBundle",
     tools: ["vsidl_rc_generator"],
     srcs: [
         ":sdv_v1_catalog_files",
@@ -204,28 +204,28 @@ genrule {
         " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
-        " --package-name com.sdv.sample_oem.health.monitored" +
+        " --package-name com.android.sdv.sample.oem.health.monitored" +
         " --service-bundle-name SampleHMBundle",
     out: [
         "vsidl-config.binpb",
     ],
 }
 
-// Pre-compiled file with VSIDL schemas for com.sdv.sample_oem.health.monitored.SecondSampleHMBundle.
+// Pre-compiled file with VSIDL schemas for com.android.sdv.sample.oem.health.monitored.SecondSampleHMBundle.
 //
-// DEPRECATED: you should use "com.sdv.sample_oem.health.monitored-vsidl-config.binpb" prebuilt_etc instead
-// Usage: add the following line to com.sdv.sample_oem.health.monitored.SecondSampleHMBundle manifest declaration:
+// DEPRECATED: you should use "com.android.sdv.sample.oem.health.monitored-vsidl-config.binpb" prebuilt_etc instead
+// Usage: add the following line to com.android.sdv.sample.oem.health.monitored.SecondSampleHMBundle manifest declaration:
 // + vsidl_schemas_path: "etc/vsidl_provider/SecondSampleHMBundle-vsidl-config.binpb"
 prebuilt_etc {
-    name: "com.sdv.sample_oem.health.monitored.SecondSampleHMBundle-vsidl-config.binpb",
+    name: "com.android.sdv.sample.oem.health.monitored.SecondSampleHMBundle-vsidl-config.binpb",
     filename: "SecondSampleHMBundle-vsidl-config.binpb",
     sub_dir: "vsidl_provider",
-    src: ":generate_vsidl_files_single_bundle_com.sdv.sample_oem.health.monitored.SecondSampleHMBundle{vsidl-config.binpb}",
+    src: ":generate_vsidl_files_single_bundle_com.android.sdv.sample.oem.health.monitored.SecondSampleHMBundle{vsidl-config.binpb}",
     installable: false,
 }
 
 genrule {
-    name: "generate_vsidl_files_single_bundle_com.sdv.sample_oem.health.monitored.SecondSampleHMBundle",
+    name: "generate_vsidl_files_single_bundle_com.android.sdv.sample.oem.health.monitored.SecondSampleHMBundle",
     tools: ["vsidl_rc_generator"],
     srcs: [
         ":sdv_v1_catalog_files",
@@ -236,28 +236,28 @@ genrule {
         " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
-        " --package-name com.sdv.sample_oem.health.monitored" +
+        " --package-name com.android.sdv.sample.oem.health.monitored" +
         " --service-bundle-name SecondSampleHMBundle",
     out: [
         "vsidl-config.binpb",
     ],
 }
 
-// Pre-compiled file with VSIDL schemas for com.sdv.sample_oem.health.monitoring.VmHMBundle.
+// Pre-compiled file with VSIDL schemas for com.android.sdv.sample.oem.health.monitoring.VmHMBundle.
 //
-// DEPRECATED: you should use "com.sdv.sample_oem.health.monitoring-vsidl-config.binpb" prebuilt_etc instead
-// Usage: add the following line to com.sdv.sample_oem.health.monitoring.VmHMBundle manifest declaration:
+// DEPRECATED: you should use "com.android.sdv.sample.oem.health.monitoring-vsidl-config.binpb" prebuilt_etc instead
+// Usage: add the following line to com.android.sdv.sample.oem.health.monitoring.VmHMBundle manifest declaration:
 // + vsidl_schemas_path: "etc/vsidl_provider/VmHMBundle-vsidl-config.binpb"
 prebuilt_etc {
-    name: "com.sdv.sample_oem.health.monitoring.VmHMBundle-vsidl-config.binpb",
+    name: "com.android.sdv.sample.oem.health.monitoring.VmHMBundle-vsidl-config.binpb",
     filename: "VmHMBundle-vsidl-config.binpb",
     sub_dir: "vsidl_provider",
-    src: ":generate_vsidl_files_single_bundle_com.sdv.sample_oem.health.monitoring.VmHMBundle{vsidl-config.binpb}",
+    src: ":generate_vsidl_files_single_bundle_com.android.sdv.sample.oem.health.monitoring.VmHMBundle{vsidl-config.binpb}",
     installable: false,
 }
 
 genrule {
-    name: "generate_vsidl_files_single_bundle_com.sdv.sample_oem.health.monitoring.VmHMBundle",
+    name: "generate_vsidl_files_single_bundle_com.android.sdv.sample.oem.health.monitoring.VmHMBundle",
     tools: ["vsidl_rc_generator"],
     srcs: [
         ":sdv_v1_catalog_files",
@@ -268,7 +268,7 @@ genrule {
         " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
-        " --package-name com.sdv.sample_oem.health.monitoring" +
+        " --package-name com.android.sdv.sample.oem.health.monitoring" +
         " --service-bundle-name VmHMBundle",
     out: [
         "vsidl-config.binpb",

@@ -28,7 +28,7 @@ rust_binary {
         "liblog_rust",
         "libtracing",
         "libsdv_tracing_rust",
-        "libsdv_mw_rs_com_sdv_google_health_health_monitor_service_bundle",
+        "libsdv_mw_rs_com_android_sdv_health_health_monitor_service_bundle",
         "libtokio",
         "libsdv_rs",
         "libbinder_rs",

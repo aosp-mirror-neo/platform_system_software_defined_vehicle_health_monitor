@@ -20,32 +20,25 @@ package {
 }
 
 genrule {
-    name: "libsdv_mw_rs_com_sdv_sample_oem_health_monitored_sample_hm_bundle_rs",
+    name: "libcom_android_sdv_health_health_monitor_service_rpc_rs_src",
     tools: ["extract_catalog_zip"],
     srcs: [":vsidlc_health_v1_catalog_files"],
-    out: [
-        "service_bundle.rs",
-    ],
-    cmd: "$(location extract_catalog_zip) $(in) --service-bundle com.sdv.sample_oem.health.monitored SampleHMBundle",
+    out: ["lib.rs"],
+    cmd: "$(location extract_catalog_zip) $(in) --rpc com.android.sdv.health HealthMonitorService",
 }
 
 rust_library {
-    name: "libsdv_mw_rs_com_sdv_sample_oem_health_monitored_sample_hm_bundle",
-    crate_name: "sdv_mw_rs_com_sdv_sample_oem_health_monitored_sample_hm_bundle",
-    crate_root: ":libsdv_mw_rs_com_sdv_sample_oem_health_monitored_sample_hm_bundle_rs{service_bundle.rs}",
+    name: "libcom_android_sdv_health_health_monitor_service_rpc_rs",
+    crate_name: "com_android_sdv_health_health_monitor_service_rpc",
     srcs: [
-        ":libsdv_mw_rs_com_sdv_sample_oem_health_monitored_sample_hm_bundle_rs",
+        ":libcom_android_sdv_health_health_monitor_service_rpc_rs_src",
     ],
-    use_expansive_default_srcs: false,
     rustlibs: [
-        "libprotobuf",
-        "liblog_rust",
         "libsdv_rs",
-        "libfutures",
         "libhealth_api",
-        "libvsidl_v1_stdlib_proto_rs",
-        "libcom_sdv_google_health_health_monitor_registration_service_rpc_rs",
-        "libsdv_proto_reflection_rs",
+    ],
+    proc_macros: [
+        "libasync_trait",
     ],
     apex_available: [
         "//apex_available:platform",

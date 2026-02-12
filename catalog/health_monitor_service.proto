@@ -14,7 +14,7 @@
 
 syntax = "proto3";
 
-package com.sdv.google.health;
+package com.android.sdv.health;
 
 import "health_config.proto";
 
