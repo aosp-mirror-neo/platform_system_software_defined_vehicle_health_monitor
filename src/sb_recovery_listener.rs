@@ -19,7 +19,8 @@ use binder::Status;
 use binder::Strong;
 use google_sdv_orchestration::aidl::google::sdv::orchestration::IOrchestrationAgent::BpOrchestrationAgent;
 use google_sdv_orchestration::aidl::google::sdv::orchestration::IOrchestrationAgent::IOrchestrationAgent;
-use google_sdv_orchestration::aidl::google::sdv::orchestration::ServiceBundleInstanceState::ServiceBundleInstanceState;
+use google_sdv_orchestration::aidl::google::sdv::orchestration::ServiceBundleInstanceRecoveryState::ServiceBundleInstanceRecoveryState;
+use google_sdv_orchestration::aidl::google::sdv::orchestration::ServiceBundleInstanceLifecycleState::ServiceBundleInstanceLifecycleState;
 use google_sdv_orchestration::aidl::google::sdv::orchestration::IServiceBundleInstanceStateChangeListener::BnServiceBundleInstanceStateChangeListener;
 use google_sdv_orchestration::aidl::google::sdv::orchestration::IServiceBundleInstanceStateChangeListener::IServiceBundleInstanceStateChangeListener;
 use google_sdv_identity::aidl::google::sdv::identity::ServiceFqin::ServiceFqin as AidlServiceFqin;
@@ -66,7 +67,7 @@ fn subscribe_to_recovery_events(
         .registerServiceBundleInstanceStateChangeListener(recovery_event_listener);
 
     if let Err(e) = result {
-        error!("Error subscribing to ServiceBundleInstanceState changes: {e}");
+        error!("Error subscribing to ServiceBundleInstanceRecoveryState changes: {e}");
     }
 }
 
@@ -93,7 +94,7 @@ fn connect_persistently_to_orchestrator(
     };
 
     orchestrator_connection.set_reconnect_listener(Box::new(move |orchestrator_binder| {
-        info!("Re-subscribing to ServiceBundleInstanceState changes");
+        info!("Re-subscribing to ServiceBundleInstanceRecoveryState changes");
         subscribe_to_recovery_events(orchestrator_binder, &listener);
     }));
 }
@@ -145,11 +146,12 @@ impl IServiceBundleInstanceStateChangeListener for RecoveryEventCallback {
     fn onServiceBundleInstanceStateChanged(
         &self,
         aidl_fqin: &AidlServiceFqin,
-        new_state: ServiceBundleInstanceState,
+        new_recovery_state: ServiceBundleInstanceRecoveryState,
+        expected_lifecycle_state: ServiceBundleInstanceLifecycleState,
     ) -> binder::Result<()> {
         let event = ServiceBundleRecoveryEvent {
             fqin: ServiceFqin::from_aidl(aidl_fqin),
-            state: SBOrchestrationState::from(&new_state)?,
+            state: SBOrchestrationState::from(&new_recovery_state, &expected_lifecycle_state)?,
         };
         self.tx.blocking_send(event).map_err(|err| {
             error!("Unexpected consumer of SB recovery events dropped! {err}");
@@ -178,24 +180,33 @@ impl FromAidlFqin for ServiceFqin {
 }
 
 impl SBOrchestrationState {
-    fn from(aidl_state: &ServiceBundleInstanceState) -> Result<Self, binder::Status> {
-        match aidl_state {
-            &ServiceBundleInstanceState::OPERATIONAL => Ok(SBRecoveryState::Normal),
-            &ServiceBundleInstanceState::RETRYING => Ok(SBRecoveryState::Recovering),
-            &ServiceBundleInstanceState::RETRY_FAILED => Ok(SBRecoveryState::FailedRecovery),
-            &ServiceBundleInstanceState::TERMINATED => Err(Status::new_exception_str(
-                ExceptionCode::ILLEGAL_STATE,
-                Some("Orchestration AIDL not yet updated for implicit monitoring"),
-            )),
+    fn from(
+        aidl_recovery_state: &ServiceBundleInstanceRecoveryState,
+        aidl_lifecycle_state: &ServiceBundleInstanceLifecycleState,
+    ) -> Result<Self, binder::Status> {
+        let recovery_state = match aidl_recovery_state {
+            &ServiceBundleInstanceRecoveryState::OPERATIONAL => Ok(SBRecoveryState::Normal),
+            &ServiceBundleInstanceRecoveryState::RETRYING => Ok(SBRecoveryState::Recovering),
+            &ServiceBundleInstanceRecoveryState::RETRY_FAILED => {
+                Ok(SBRecoveryState::FailedRecovery)
+            }
             bad_value => Err(Status::new_exception_str(
                 ExceptionCode::ILLEGAL_STATE,
                 Some(format!("Illegal enum value received from orch binder: {:?}", bad_value)),
             )),
-        }
-        .map(|recovery_state| SBOrchestrationState {
-            recovery_state,
-            lifecycle_state: SBLifecycleState::Created,
-        })
+        }?;
+
+        let lifecycle_state = match aidl_lifecycle_state {
+            &ServiceBundleInstanceLifecycleState::CREATED => Ok(SBLifecycleState::Created),
+            &ServiceBundleInstanceLifecycleState::STARTED => Ok(SBLifecycleState::Started),
+            &ServiceBundleInstanceLifecycleState::DESTROYED => Ok(SBLifecycleState::Destroyed),
+            bad_value => Err(Status::new_exception_str(
+                ExceptionCode::ILLEGAL_STATE,
+                Some(format!("Illegal enum value received from orch binder: {:?}", bad_value)),
+            )),
+        }?;
+
+        Ok(SBOrchestrationState { recovery_state, lifecycle_state })
     }
 }
 
@@ -291,7 +302,8 @@ mod tests {
                 callback
                     .onServiceBundleInstanceStateChanged(
                         &aidl_fqin,
-                        ServiceBundleInstanceState::OPERATIONAL,
+                        ServiceBundleInstanceRecoveryState::OPERATIONAL,
+                        ServiceBundleInstanceLifecycleState::CREATED,
                     )
                     .unwrap()
             });
@@ -304,29 +316,53 @@ mod tests {
 
     #[test]
     fn test_sborchestrationstate_from_all_states() {
-        assert_eq!(
-            SBOrchestrationState::from(&ServiceBundleInstanceState::OPERATIONAL)
-                .unwrap()
-                .recovery_state,
-            SBRecoveryState::Normal
-        );
-        assert_eq!(
-            SBOrchestrationState::from(&ServiceBundleInstanceState::RETRYING)
-                .unwrap()
-                .recovery_state,
-            SBRecoveryState::Recovering
-        );
-        assert_eq!(
-            SBOrchestrationState::from(&ServiceBundleInstanceState::RETRY_FAILED)
-                .unwrap()
-                .recovery_state,
-            SBRecoveryState::FailedRecovery
-        );
-        assert!(SBOrchestrationState::from(&ServiceBundleInstanceState::TERMINATED).is_err());
+        // Test valid conversions
+        let operational_created = SBOrchestrationState::from(
+            &ServiceBundleInstanceRecoveryState::OPERATIONAL,
+            &ServiceBundleInstanceLifecycleState::CREATED,
+        )
+        .unwrap();
+        assert_eq!(operational_created.recovery_state, SBRecoveryState::Normal);
+        assert_eq!(operational_created.lifecycle_state, SBLifecycleState::Created);
+
+        let retrying_started = SBOrchestrationState::from(
+            &ServiceBundleInstanceRecoveryState::RETRYING,
+            &ServiceBundleInstanceLifecycleState::STARTED,
+        )
+        .unwrap();
+        assert_eq!(retrying_started.recovery_state, SBRecoveryState::Recovering);
+        assert_eq!(retrying_started.lifecycle_state, SBLifecycleState::Started);
+
+        let failed_destroyed = SBOrchestrationState::from(
+            &ServiceBundleInstanceRecoveryState::RETRY_FAILED,
+            &ServiceBundleInstanceLifecycleState::DESTROYED,
+        )
+        .unwrap();
+        assert_eq!(failed_destroyed.recovery_state, SBRecoveryState::FailedRecovery);
+        assert_eq!(failed_destroyed.lifecycle_state, SBLifecycleState::Destroyed);
+
+        // Test invalid recovery state
         assert!(SBOrchestrationState::from(
-            &ServiceBundleInstanceState::SERVICE_BUNDLE_INSTANCE_STATE_UNSPECIFIED
+            &ServiceBundleInstanceRecoveryState::SERVICE_BUNDLE_INSTANCE_RECOVERY_STATE_UNSPECIFIED,
+            &ServiceBundleInstanceLifecycleState::CREATED
         )
         .is_err());
-        assert!(SBOrchestrationState::from(&ServiceBundleInstanceState(99)).is_err());
+        assert!(SBOrchestrationState::from(
+            &ServiceBundleInstanceRecoveryState(99),
+            &ServiceBundleInstanceLifecycleState::CREATED
+        )
+        .is_err());
+
+        // Test invalid lifecycle state
+        assert!(SBOrchestrationState::from(
+            &ServiceBundleInstanceRecoveryState::OPERATIONAL,
+            &ServiceBundleInstanceLifecycleState::SERVICE_BUNDLE_INSTANCE_LIFECYCLE_STATE_UNSPECIFIED
+        )
+        .is_err());
+        assert!(SBOrchestrationState::from(
+            &ServiceBundleInstanceRecoveryState::OPERATIONAL,
+            &ServiceBundleInstanceLifecycleState(99)
+        )
+        .is_err());
     }
 }
