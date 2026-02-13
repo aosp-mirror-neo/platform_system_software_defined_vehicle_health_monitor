@@ -1,3 +1,17 @@
+// Copyright (C) 2026 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::hb_monitor::HeartbeatEvent;
 use futures::stream;
 use futures::Stream;
@@ -12,34 +26,29 @@ use tap::prelude::*;
 pub fn into_heartbeats(
     s: ByteBuffersStream,
 ) -> impl Stream<Item = SdvResult<HeartbeatEvent>> + Send {
-    s.pipe(observe::<ServiceHeartbeat>).into_flattened_heartbeats().with_monitoring_start_event()
+    s.pipe(observe::<ServiceHeartbeat>)
+        .pipe(into_flattened_heartbeats)
+        .pipe(with_monitoring_start_event)
 }
 
-trait HertbeatVecStream {
-    fn into_flattened_heartbeats(self) -> impl Stream<Item = SdvResult<HeartbeatEvent>> + Send;
-}
-
-impl<T: Stream<Item = SdvResult<Vec<ServiceHeartbeat>>> + Send> HertbeatVecStream for T {
-    fn into_flattened_heartbeats(self) -> impl Stream<Item = SdvResult<HeartbeatEvent>> + Send {
-        self.map(|res| match res {
+fn into_flattened_heartbeats(
+    input: impl Stream<Item = SdvResult<Vec<ServiceHeartbeat>>> + Send,
+) -> impl Stream<Item = SdvResult<HeartbeatEvent>> + Send {
+    input
+        .map(|res| match res {
             Ok(v) => v.into_iter().map(TryInto::try_into).pipe(stream::iter).left_stream(),
             Err(e) => stream::once(async { Err(e) }).right_stream(),
         })
         .flatten()
-    }
 }
 
-trait HeartbeatStream {
-    fn with_monitoring_start_event(self) -> impl Stream<Item = SdvResult<HeartbeatEvent>> + Send;
-}
-
-impl<T: Stream<Item = SdvResult<HeartbeatEvent>> + Send> HeartbeatStream for T {
-    fn with_monitoring_start_event(self) -> impl Stream<Item = SdvResult<HeartbeatEvent>> + Send {
-        stream::once(future::ready(Ok(HeartbeatEvent::TrackingHeartbeat(
-            crate::hb_monitor::HeartbeatTrackEvent::StartedMonitoring(SystemTime::now()),
-        ))))
-        .chain(self)
-    }
+fn with_monitoring_start_event(
+    input: impl Stream<Item = SdvResult<HeartbeatEvent>> + Send,
+) -> impl Stream<Item = SdvResult<HeartbeatEvent>> + Send {
+    stream::once(future::ready(Ok(HeartbeatEvent::TrackingHeartbeat(
+        crate::hb_monitor::HeartbeatTrackEvent::StartedMonitoring(SystemTime::now()),
+    ))))
+    .chain(input)
 }
 
 #[cfg(test)]
@@ -56,7 +65,7 @@ mod tests {
             ServiceHeartbeat::default(),
             ServiceHeartbeat::default(),
         ])));
-        let output_stream = input_stream.into_flattened_heartbeats();
+        let output_stream = input_stream.pipe(into_flattened_heartbeats);
         let mut output_stream = pin!(output_stream);
         let _res1 = output_stream.next().await.expect("Expecting 1 heartbeat");
         let _res2 = output_stream.next().await.expect("Expecting 2 heartbeats");
@@ -68,7 +77,7 @@ mod tests {
         let input_stream = stream::once(future::ready(SdvResult::Err(SdvStatus::new(
             sdv_status_rs::SdvStatusCode::NotFound,
         ))));
-        let output_stream = input_stream.into_flattened_heartbeats();
+        let output_stream = input_stream.pipe(into_flattened_heartbeats);
         let mut output_stream = pin!(output_stream);
 
         let res1 = output_stream.next().await.expect("Expecting 1 heartbeat");
