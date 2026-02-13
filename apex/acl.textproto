@@ -30,7 +30,7 @@ acls {
 acls {
     name: "MonitoredClients"
     include: "com.sdv.sample_oem.*"
-    include: "com.sdv.google.performance.*"
+    include: "com.andorid.sdv.performance.*"
 }
 
 unit_types {
