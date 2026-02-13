@@ -41,14 +41,14 @@ pub enum HeartbeatEvent {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HeartbeatTrackEvent {
     StartedMonitoring(SystemTime),
-    ReceivedHearbeat(SystemTime),
+    ReceivedHeartbeat(SystemTime),
 }
 
 impl HeartbeatTrackEvent {
     fn get_event_time(self) -> SystemTime {
         match self {
             HeartbeatTrackEvent::StartedMonitoring(t) => t,
-            HeartbeatTrackEvent::ReceivedHearbeat(t) => t,
+            HeartbeatTrackEvent::ReceivedHeartbeat(t) => t,
         }
     }
 }
@@ -148,7 +148,7 @@ impl EntityMonitor for HeartbeatMonitor {
             HeartbeatTrackEvent::StartedMonitoring(_) => {
                 self.config.allowed_delay_since_monitor_start
             }
-            HeartbeatTrackEvent::ReceivedHearbeat(_) => {
+            HeartbeatTrackEvent::ReceivedHeartbeat(_) => {
                 self.config.allowed_delay_since_last_heartbeat
             }
         };
@@ -185,7 +185,7 @@ impl TryFrom<ServiceHeartbeat> for HeartbeatEvent {
                 "Missing timestamp".to_string(),
             ))
             .map(|timestamp| {
-                HeartbeatEvent::TrackingHeartbeat(HeartbeatTrackEvent::ReceivedHearbeat(
+                HeartbeatEvent::TrackingHeartbeat(HeartbeatTrackEvent::ReceivedHeartbeat(
                     timestamp.into(),
                 ))
             })
