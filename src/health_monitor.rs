@@ -64,6 +64,8 @@ mod health_reporter;
 pub mod monitor_manager;
 pub mod monitor_model;
 pub mod power_state;
+mod qos_config;
+mod qos_monitor;
 mod qos_registration_listener;
 pub mod read_sys_prop;
 pub mod sb_recovery_listener;
