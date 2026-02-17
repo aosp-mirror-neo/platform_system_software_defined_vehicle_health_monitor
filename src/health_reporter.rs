@@ -30,12 +30,18 @@ impl HealthReporter {
     }
 
     #[instrument(skip(self))]
-    pub fn report_vm_health(&self, hbs_missed: bool, recoveries_failed: bool) -> SdvResult<()> {
+    pub fn report_vm_health(
+        &self,
+        hbs_missed: bool,
+        recoveries_failed: bool,
+        qos_violations_detected: bool,
+    ) -> SdvResult<()> {
         // TODO rework VMHealth output API to take into account agent monitoring,
         // and provide full observability into monitoring state
         let vm_health = VmHealth {
             all_monitored_service_bundles_healthy: !hbs_missed,
             all_service_bundles_alive: !recoveries_failed,
+            qos_violations_detected,
             ..Default::default()
         };
         self.vm_health_publisher.publish(&vm_health)
@@ -67,7 +73,7 @@ mod tests {
             .returning(|_| Err(SdvStatus::with_message(SdvStatusCode::Internal, "Publish failed")));
 
         let reporter = HealthReporter::new(Box::new(mock_publisher));
-        let result = reporter.report_vm_health(true, true);
+        let result = reporter.report_vm_health(true, true, true);
 
         assert!(result.is_err());
     }
