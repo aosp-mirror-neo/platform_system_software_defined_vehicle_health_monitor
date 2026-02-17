@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::hb_config::HeartbeatMonitoringConfig;
+use crate::qos_config::QosConfig;
 use binder::Strong;
 use google_sdv_service_bundles_registry::aidl::google::sdv::service_bundles_registry::IRegistry::{
     BpRegistry, IRegistry,
@@ -29,11 +30,10 @@ use std::fs::File;
 use std::io::Read;
 use std::time::Duration;
 use tokio::sync::OnceCell;
-use health_api::health_config::QosMonitoringConfiguration;
 
 pub struct InstanceConfig {
     pub hb_config: Option<HeartbeatMonitoringConfig>,
-    pub qos_config: HashMap<String, QosMonitoringConfiguration>, // key: topic, value: QosMonitoringConfiguration
+    pub qos_config: HashMap<String, QosConfig>, // key: topic, value: QosConfig
 }
 
 pub struct ImplicitMonitoringConfigRepo(OnceCell<HashMap<ServiceFqin, InstanceConfig>>);
@@ -68,7 +68,7 @@ impl ImplicitMonitoringConfigRepo {
     pub async fn get_qos_config(
         &self,
         fqin: &ServiceFqin,
-    ) -> SdvResult<Option<&HashMap<String, QosMonitoringConfiguration>>> {
+    ) -> SdvResult<Option<&HashMap<String, QosConfig>>> {
         self.get_sb_instance_config(fqin).await?.map(|c| &c.qos_config).pipe(Ok)
     }
 
@@ -146,7 +146,10 @@ fn parse_bundle_health_config(path: &str) -> SdvResult<HashMap<String, InstanceC
                 conf.health_config
                     .into_option()
                     .and_then(|hc| HeartbeatMonitoringConfig::try_from(hc).ok()),
-                conf.qos_config,
+                conf.qos_config
+                    .into_iter()
+                    .filter_map(|(k, v)| (k, TryInto::<QosConfig>::try_into(v).ok()?).pipe(Some))
+                    .collect(),
             )
         })
         .map(|(k, hb_config, qos_config)| (k, InstanceConfig { hb_config, qos_config }))
@@ -274,11 +277,11 @@ pub mod tests {
         let qos_config_first_unit = qos_config.get("my-qos-topic-name-1").unwrap();
         let qos_config_second_unit = qos_config.get("my-qos-topic-name-2").unwrap();
 
-        assert!(qos_config_first_unit.qos_period_threshold_ms.is_some());
-        assert!(qos_config_first_unit.qos_latency_threshold_ms.is_none());
+        assert!(qos_config_first_unit.frequency_threshold.is_some());
+        assert!(qos_config_first_unit.latency_threshold.is_none());
 
-        assert!(qos_config_second_unit.qos_period_threshold_ms.is_some());
-        assert!(qos_config_second_unit.qos_latency_threshold_ms.is_some());
+        assert!(qos_config_second_unit.frequency_threshold.is_some());
+        assert!(qos_config_second_unit.latency_threshold.is_some());
     }
 
     #[test]
@@ -289,6 +292,23 @@ pub mod tests {
 
         assert!(res.is_err(), "parsing an invalid textproto file did not return an error!");
     }
+
+    #[test]
+    fn test_parse_health_config_filters_invalid_qos_entries() {
+        let res = parse_bundle_health_config(
+            "src/test_configs/implicit_per_bundle_health_configs/qos_with_invalid.textproto",
+        )
+        .expect("Expecting parsing successful");
+
+        assert!(res.contains_key("instance1"));
+        let qos_config = &res.get("instance1").unwrap().qos_config;
+
+        // "valid-qos" should be present, "invalid-qos-empty" should be filtered out
+        assert_eq!(qos_config.len(), 1);
+        assert!(qos_config.contains_key("valid-qos"));
+        assert!(!qos_config.contains_key("invalid-qos-empty"));
+    }
+
     #[test]
     fn test_parse_health_config_from_path_when_path_invalid() {
         let res = parse_bundle_health_config("invalid/path");

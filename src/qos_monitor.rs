@@ -35,6 +35,11 @@ pub struct QosTick {
     latency: Duration,
     received_time: SystemTime,
 }
+impl Default for QosTick {
+    fn default() -> Self {
+        Self { latency: Duration::ZERO, received_time: SystemTime::now() }
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub enum QosStatus {
@@ -52,19 +57,24 @@ pub struct QosMonitor {
 }
 
 impl QosMonitor {
-    pub async fn new(
+    pub fn new(
         sud_discovered_tick: SdvResult<QosTick>,
-        qos_stream: impl Stream<Item = (Option<SdvResult<QosTick>>, SdvResult<QosTick>)>
-            + Send
-            + 'static,
+        qos_stream: impl Stream<Item = SdvResult<QosTick>> + Send + 'static,
         qos_config: QosConfig,
         current_time_provider: Box<dyn Send + Sync + 'static + Fn() -> SystemTime>,
     ) -> Self {
         let (tx, rx) = tokio::sync::watch::channel((None, sud_discovered_tick));
         let listening_task = tokio::spawn(async move {
             qos_stream
-                .for_each(async |t| {
-                    let _ = tx.send_replace(t);
+                .for_each(async |curr| {
+                    let prev = {
+                        let guard = tx.borrow();
+                        match &guard.1 {
+                            Ok(prev) => Ok(*prev),
+                            Err(e) => Err(SdvStatus::new(e.status_code())),
+                        }
+                    };
+                    let _ = tx.send_replace((Some(prev), curr));
                 })
                 .await;
         });
@@ -92,7 +102,7 @@ impl QosMonitor {
             return Ok(QosStatus::UnhealthyLatencyViolation);
         }
         if check_wire_frequency_violation(
-            self.config.latency_threshold,
+            self.config.frequency_threshold,
             previous_tick,
             current_tick,
         )? {
@@ -209,6 +219,7 @@ impl TryFrom<QosHeartbeat> for QosTick {
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused_imports)]
     use super::*;
     use futures::stream;
     use protobuf::well_known_types::timestamp::Timestamp;
@@ -263,13 +274,8 @@ mod tests {
         };
         let expected = (Some(Ok(tick1)), Ok(tick2));
 
-        let mut monitor = QosMonitor::new(
-            Ok(tick1),
-            stream::iter(vec![(Some(Ok(tick1)), Ok(tick2))]),
-            config,
-            mock_time_provider,
-        )
-        .await;
+        let mut monitor =
+            QosMonitor::new(Ok(tick1), stream::iter(vec![Ok(tick2)]), config, mock_time_provider);
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
         let status = monitor.get_status().unwrap();
@@ -296,13 +302,9 @@ mod tests {
         };
 
         let expected = (Some(Ok(tick1)), Ok(tick2));
-        let mut monitor = QosMonitor::new(
-            Ok(tick1),
-            stream::iter(vec![(Some(Ok(tick1)), Ok(tick2))]),
-            config,
-            mock_time_provider,
-        )
-        .await;
+        let mut monitor =
+        // let monitor =
+            QosMonitor::new(Ok(tick1), stream::iter(vec![Ok(tick2)]), config, mock_time_provider);
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
         let status = monitor.get_status().unwrap();
@@ -330,13 +332,8 @@ mod tests {
         };
 
         let expected = (Some(Ok(tick1)), Ok(tick2));
-        let mut monitor = QosMonitor::new(
-            Ok(tick1),
-            stream::iter(vec![(Some(Ok(tick1)), Ok(tick2))]),
-            config,
-            mock_time_provider,
-        )
-        .await;
+        let mut monitor =
+            QosMonitor::new(Ok(tick1), stream::iter(vec![Ok(tick2)]), config, mock_time_provider);
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
         let status = monitor.get_status().unwrap();
@@ -363,13 +360,8 @@ mod tests {
         };
 
         let expected = (Some(Ok(tick1)), Ok(tick2));
-        let mut monitor = QosMonitor::new(
-            Ok(tick1),
-            stream::iter(vec![(Some(Ok(tick1)), Ok(tick2))]),
-            config,
-            mock_time_provider,
-        )
-        .await;
+        let mut monitor =
+            QosMonitor::new(Ok(tick1), stream::iter(vec![Ok(tick2)]), config, mock_time_provider);
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
         let status = monitor.get_status().unwrap();
@@ -385,14 +377,13 @@ mod tests {
 
         let tick = QosTick { latency: Duration::from_millis(50), received_time: SystemTime::now() };
 
-        let expected = (None, Err(SdvStatus::new(SdvStatusCode::Internal)));
+        let expected = (Some(Ok(tick)), Err(SdvStatus::new(SdvStatusCode::Internal)));
         let mut monitor = QosMonitor::new(
             Ok(tick),
-            stream::iter(vec![(None, Err(SdvStatus::new(SdvStatusCode::Internal)))]),
+            stream::iter(vec![Err(SdvStatus::new(SdvStatusCode::Internal))]),
             config,
             Box::new(SystemTime::now),
-        )
-        .await;
+        );
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
         let result = monitor.get_status();
@@ -410,7 +401,7 @@ mod tests {
         let now = SystemTime::now();
         let tick = QosTick { latency: Duration::from_millis(50), received_time: now };
         let monitor =
-            QosMonitor::new(Ok(tick), stream::pending(), config, Box::new(SystemTime::now)).await;
+            QosMonitor::new(Ok(tick), stream::pending(), config, Box::new(SystemTime::now));
         let mut writer = Vec::new();
         let _ = monitor.dump(&mut writer, &[]);
     }

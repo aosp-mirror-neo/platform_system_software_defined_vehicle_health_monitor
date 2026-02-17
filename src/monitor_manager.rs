@@ -21,6 +21,7 @@ use sdv_status_rs::SdvStatus;
 use sdv_status_rs::SdvStatusCode;
 use std::collections::HashMap;
 use std::io::Error;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -33,6 +34,9 @@ use crate::hb_implicit_monitoring_db::ImplicitMonitoringConfigRepo;
 use crate::hb_monitor_factory::HeartbeatMonitorFactory;
 use crate::monitor_model::AgentName;
 use crate::monitor_model::EntityMonitor;
+use crate::qos_monitor::QosMonitor;
+use crate::qos_registration_listener::QosMonitorId;
+use crate::qos_registration_listener::QosRegistrationAction;
 use crate::sb_recovery_listener::ServiceBundleRecoveryEvent;
 use crate::sb_recovery_monitor::SBLifecycleState;
 use crate::sb_recovery_monitor::SBOrchestrationState;
@@ -43,19 +47,22 @@ use crate::utils;
 pub struct MonitorManager {
     sb_recovery_events_processing: JoinHandle<()>,
     hb_registration_commands_processing: JoinHandle<()>,
+    qos_registration_commands_processing: JoinHandle<()>,
     pub sb_recovery_monitors: watch::Receiver<HashMap<ServiceFqin, SBRecoveryMonitor>>,
     //TODO: enhance agent crash monitoring with recovery monitoring capabilities
     pub agent_crash_monitors: HashMap<AgentName, Box<dyn EntityMonitor>>,
     pub hb_monitors: watch::Receiver<HashMap<ServiceFqin, Box<dyn EntityMonitor>>>,
+    pub qos_monitors: watch::Receiver<HashMap<QosMonitorId, QosMonitor>>,
 }
 impl MonitorManager {
     pub fn new(
-        implicit_monitoring_config_db: ImplicitMonitoringConfigRepo,
+        implicit_monitoring_config_db: Arc<ImplicitMonitoringConfigRepo>,
         hb_registration_commands: mpsc::Receiver<HBRegistrationCommand>,
         hb_registration_commands_sink: mpsc::Sender<HBRegistrationCommand>,
         sb_recovery_events: mpsc::Receiver<ServiceBundleRecoveryEvent>,
         agent_crash_monitors: HashMap<AgentName, Box<dyn EntityMonitor>>,
         hb_monitor_factory: impl HeartbeatMonitorFactory + 'static,
+        qos_registration_commands: mpsc::Receiver<QosRegistrationAction>,
     ) -> Self {
         let (sb_recovery_tx, sb_recovery_monitors) = watch::channel(HashMap::new());
         let sb_recovery_events_processing = tokio::spawn(Self::process_recovery_events(
@@ -73,12 +80,18 @@ impl MonitorManager {
                 hb_monitor_factory,
             ));
 
+        let (qos_monitors_tx, qos_monitors) = watch::channel(HashMap::new());
+        let qos_registration_commands_processing =
+            tokio::spawn(Self::process_qos_events(qos_registration_commands, qos_monitors_tx));
+
         Self {
             sb_recovery_events_processing,
             hb_registration_commands_processing,
+            qos_registration_commands_processing,
             sb_recovery_monitors,
             agent_crash_monitors,
             hb_monitors,
+            qos_monitors,
         }
     }
 
@@ -122,8 +135,28 @@ impl MonitorManager {
         .map(|action| HBRegistrationCommand { fqin: incoming_event.fqin, action })
     }
 
+    async fn process_qos_events(
+        mut qos_registration_commands: mpsc::Receiver<QosRegistrationAction>,
+        qos_monitors_tx: watch::Sender<HashMap<QosMonitorId, QosMonitor>>,
+    ) {
+        while let Some(action) = qos_registration_commands.recv().await {
+            match action {
+                QosRegistrationAction::Register(id, monitor) => {
+                    qos_monitors_tx.send_modify(|monitors| {
+                        monitors.insert(id, monitor);
+                    });
+                }
+                QosRegistrationAction::Unregister(id) => {
+                    qos_monitors_tx.send_modify(|monitors| {
+                        monitors.remove(&id);
+                    });
+                }
+            }
+        }
+    }
+
     async fn process_recovery_events(
-        implicit_monitoring_config_db: ImplicitMonitoringConfigRepo,
+        implicit_monitoring_config_db: Arc<ImplicitMonitoringConfigRepo>,
         incoming_events: mpsc::Receiver<ServiceBundleRecoveryEvent>,
         recovery_monitors_sink: watch::Sender<HashMap<ServiceFqin, SBRecoveryMonitor>>,
         hb_registration_commands_sink: mpsc::Sender<HBRegistrationCommand>,
@@ -282,6 +315,7 @@ impl Drop for MonitorManager {
     fn drop(&mut self) {
         self.sb_recovery_events_processing.abort();
         self.hb_registration_commands_processing.abort();
+        self.qos_registration_commands_processing.abort();
     }
 }
 
@@ -486,7 +520,7 @@ mod tests {
             let (hb_registration_commands_sink, _hb_registration_commands_rx) = channel(10);
 
             let processing_task = tokio::spawn(MonitorManager::process_recovery_events(
-                ImplicitMonitoringConfigRepo::new_for_testing(HashMap::default()),
+                ImplicitMonitoringConfigRepo::new_for_testing(HashMap::default()).into(),
                 event_rx,
                 monitor_tx,
                 hb_registration_commands_sink,
@@ -862,8 +896,63 @@ mod tests {
         }
     }
 
+    mod qos_monitor_management_tests {
+        use super::*;
+        use crate::qos_config::QosConfig;
+        use crate::qos_monitor::QosMonitor;
+        use crate::qos_registration_listener::{QosMonitorId, QosRegistrationAction};
+        use futures::stream;
+        use std::time::Duration;
+        use std::time::SystemTime;
+        use tokio::time::timeout;
+
+        #[tokio::test]
+        async fn test_process_qos_events() {
+            let (qos_tx, qos_rx) = mpsc::channel(10);
+            let (monitors_tx, mut monitors_rx) = watch::channel(HashMap::new());
+
+            tokio::spawn(MonitorManager::process_qos_events(qos_rx, monitors_tx));
+
+            let fqin = ServiceFqin::from_str("vm:com.google.test.TestSB/instance1").unwrap();
+            let qos_id = QosMonitorId::new(fqin.clone(), "unit1".to_string(), "topic1".to_string());
+
+            let qos_config = QosConfig { latency_threshold: None, frequency_threshold: None };
+
+            let monitor = QosMonitor::new(
+                Ok(Default::default()),
+                stream::pending(),
+                qos_config,
+                Box::new(SystemTime::now),
+            );
+
+            // 1. Test Registration
+            qos_tx.send(QosRegistrationAction::Register(qos_id, monitor)).await.unwrap();
+
+            timeout(Duration::from_millis(200), monitors_rx.changed()).await.unwrap().unwrap();
+            {
+                let monitors = monitors_rx.borrow();
+                assert_eq!(monitors.len(), 1);
+                let id_to_check =
+                    QosMonitorId::new(fqin.clone(), "unit1".to_string(), "topic1".to_string());
+                assert!(monitors.contains_key(&id_to_check));
+            }
+
+            // 2. Test Unregistration
+            let qos_id_unregister =
+                QosMonitorId::new(fqin.clone(), "unit1".to_string(), "topic1".to_string());
+            qos_tx.send(QosRegistrationAction::Unregister(qos_id_unregister)).await.unwrap();
+
+            timeout(Duration::from_millis(200), monitors_rx.changed()).await.unwrap().unwrap();
+            {
+                let monitors = monitors_rx.borrow();
+                assert!(monitors.is_empty());
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_monitor_manager_dumpsys() {
+        // TODO(tmot) add qos monitors to this test
         let monitored_sb_fqin = "vm:com.google.test.TestSB/instance1";
 
         let agent_crash_monitors = HashMap::from([(
@@ -871,6 +960,7 @@ mod tests {
             Box::new(TestMonitor::default()) as Box<dyn EntityMonitor>,
         )]);
 
+        let (_, qos_monitors) = watch::channel(HashMap::new());
         let (_, hb_monitors) = watch::channel(HashMap::from([(
             ServiceFqin::from_str(monitored_sb_fqin).unwrap(),
             Box::new(TestMonitor::default()) as Box<dyn EntityMonitor>,
@@ -885,9 +975,11 @@ mod tests {
         let mm = MonitorManager {
             sb_recovery_events_processing: tokio::spawn(future::pending()),
             hb_registration_commands_processing: tokio::spawn(future::pending()),
+            qos_registration_commands_processing: tokio::spawn(future::pending()),
             sb_recovery_monitors,
             agent_crash_monitors,
             hb_monitors,
+            qos_monitors,
         };
 
         let mut writer = StringWriter::new();

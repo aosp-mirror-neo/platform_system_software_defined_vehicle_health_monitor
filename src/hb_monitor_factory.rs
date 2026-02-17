@@ -54,10 +54,10 @@ pub struct HeartbeatMonitorFactoryImpl<T: Comms> {
 impl<T: Comms> HeartbeatMonitorFactoryImpl<T> {
     pub fn new(
         context: T::ContextRef,
-        service_discovery: T::ServiceDiscoveryManager,
+        service_discovery: Arc<T::ServiceDiscoveryManager>,
         power_state_receiver_factory: Arc<dyn PowerStateReceiverFactory>,
     ) -> Self {
-        Self { context, service_discovery: service_discovery.into(), power_state_receiver_factory }
+        Self { context, service_discovery, power_state_receiver_factory }
     }
 }
 

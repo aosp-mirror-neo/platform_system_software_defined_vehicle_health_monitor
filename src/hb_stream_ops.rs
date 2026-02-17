@@ -14,10 +14,13 @@
 
 use crate::commstack_trait::Comms;
 use crate::hb_monitor::HeartbeatEvent;
+use crate::qos_monitor::QosTick;
+
 use futures::stream;
 use futures::Stream;
 use futures::StreamExt;
 use health_api::health_topic::ServiceHeartbeat;
+use health_api::qos_heartbeat::QosHeartbeat;
 use sdv_comms::dt::SubscriberOptions;
 use sdv_mw_rs_comms::{observe, ByteBuffersStream};
 use sdv_status_rs::SdvResult;
@@ -85,6 +88,10 @@ pub trait HeartbeatType: TryFrom<Self::WireType, Error = SdvStatus> + Send {
 
 impl HeartbeatType for HeartbeatEvent {
     type WireType = ServiceHeartbeat;
+}
+
+impl HeartbeatType for QosTick {
+    type WireType = QosHeartbeat;
 }
 
 #[cfg(test)]

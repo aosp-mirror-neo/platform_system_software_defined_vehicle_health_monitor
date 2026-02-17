@@ -20,7 +20,6 @@ use sdv_status_rs::SdvStatusCode;
 use std::sync::Arc;
 use std::time::Duration;
 use tap::Pipe;
-
 pub struct CommsImpl;
 impl Comms for CommsImpl {
     type ContextRef = ContextRef;

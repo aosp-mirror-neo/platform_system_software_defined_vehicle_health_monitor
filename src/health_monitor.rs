@@ -66,7 +66,7 @@ pub mod monitor_model;
 pub mod power_state;
 mod qos_config;
 mod qos_monitor;
-mod qos_registration_listener;
+pub mod qos_registration_listener;
 pub mod read_sys_prop;
 pub mod sb_recovery_listener;
 mod sb_recovery_monitor;
@@ -253,13 +253,15 @@ pub mod tests {
         let hm = {
             let (hb_registration_commands_sink, hb_registration_commands) = mpsc::channel(1);
             let (_, hb_recovery_events) = mpsc::channel(1);
+            let (_, qos_events) = mpsc::channel(1);
             let monitor_manager = MonitorManager::new(
-                ImplicitMonitoringConfigRepo::new(),
+                ImplicitMonitoringConfigRepo::new().into(),
                 hb_registration_commands,
                 hb_registration_commands_sink,
                 hb_recovery_events,
                 HashMap::new(),
                 MockHeartbeatMonitorFactory::new(),
+                qos_events,
             );
             let monitor_manager = Arc::new(monitor_manager);
             HealthMonitor::new(monitor_manager)
@@ -473,13 +475,15 @@ pub mod tests {
         let hm = {
             let (hb_registration_commands_sink, hb_registration_commands) = mpsc::channel(1);
             let (_, hb_recovery_events) = mpsc::channel(1);
+            let (_, qos_events) = mpsc::channel(1);
             let monitor_manager = MonitorManager::new(
-                ImplicitMonitoringConfigRepo::new(),
+                ImplicitMonitoringConfigRepo::new().into(),
                 hb_registration_commands,
                 hb_registration_commands_sink,
                 hb_recovery_events,
                 HashMap::new(),
                 MockHeartbeatMonitorFactory::new(),
+                qos_events,
             );
             let monitor_manager = Arc::new(monitor_manager);
             HealthMonitor::new(monitor_manager)
@@ -503,13 +507,15 @@ pub mod tests {
         let hm = {
             let (hb_registration_commands_sink, hb_registration_commands) = mpsc::channel(1);
             let (_, hb_recovery_events) = mpsc::channel(1);
+            let (_, qos_events) = mpsc::channel(1);
             let monitor_manager = MonitorManager::new(
-                ImplicitMonitoringConfigRepo::new(),
+                ImplicitMonitoringConfigRepo::new().into(),
                 hb_registration_commands,
                 hb_registration_commands_sink,
                 hb_recovery_events,
                 HashMap::new(),
                 MockHeartbeatMonitorFactory::new(),
+                qos_events,
             );
             let monitor_manager = Arc::new(monitor_manager);
             HealthMonitor::new(monitor_manager)
@@ -563,13 +569,15 @@ pub mod tests {
         let hm = {
             let (hb_registration_commands_sink, hb_registration_commands) = mpsc::channel(1);
             let (_, hb_recovery_events) = mpsc::channel(1);
+            let (_, qos_events) = mpsc::channel(1);
             let monitor_manager = MonitorManager::new(
-                ImplicitMonitoringConfigRepo::new(),
+                ImplicitMonitoringConfigRepo::new().into(),
                 hb_registration_commands,
                 hb_registration_commands_sink,
                 hb_recovery_events,
                 HashMap::new(),
                 MockHeartbeatMonitorFactory::new(),
+                qos_events,
             );
             let monitor_manager = Arc::new(monitor_manager);
             HealthMonitor::new(monitor_manager)
