@@ -24,6 +24,7 @@ use sdv_comms::id::ServiceFqin;
 use sdv_comms::sd::UnitType;
 use sdv_status_rs::SdvStatusCode;
 use sdv_status_rs::{SdvResult, SdvStatus};
+use std::fmt;
 use std::future;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -125,6 +126,19 @@ pub struct QosMonitorId {
     fqin: ServiceFqin,
     unit_name: String,
     topic: String,
+}
+
+impl fmt::Display for QosMonitorId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ID:\n\
+            * HB topic: {}\n\
+            * HB unit_name: {}\n\
+            * FQIN of receiver: {}\n",
+            self.topic, self.unit_name, self.fqin
+        )
+    }
 }
 impl QosMonitorId {
     pub fn new(fqin: ServiceFqin, unit_name: String, topic: String) -> Self {
