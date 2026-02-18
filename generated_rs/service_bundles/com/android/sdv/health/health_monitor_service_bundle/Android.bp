@@ -20,21 +20,21 @@ package {
 }
 
 genrule {
-    name: "libsdv_mw_rs_com_sdv_google_health_fake_bundle_rs",
+    name: "libsdv_mw_rs_com_android_sdv_health_health_monitor_service_bundle_rs",
     tools: ["extract_catalog_zip"],
     srcs: [":vsidlc_health_v1_catalog_files"],
     out: [
         "service_bundle.rs",
     ],
-    cmd: "$(location extract_catalog_zip) $(in) --service-bundle com.sdv.google.health FakeBundle",
+    cmd: "$(location extract_catalog_zip) $(in) --service-bundle com.android.sdv.health HealthMonitorServiceBundle",
 }
 
 rust_library {
-    name: "libsdv_mw_rs_com_sdv_google_health_fake_bundle",
-    crate_name: "sdv_mw_rs_com_sdv_google_health_fake_bundle",
-    crate_root: ":libsdv_mw_rs_com_sdv_google_health_fake_bundle_rs{service_bundle.rs}",
+    name: "libsdv_mw_rs_com_android_sdv_health_health_monitor_service_bundle",
+    crate_name: "sdv_mw_rs_com_android_sdv_health_health_monitor_service_bundle",
+    crate_root: ":libsdv_mw_rs_com_android_sdv_health_health_monitor_service_bundle_rs{service_bundle.rs}",
     srcs: [
-        ":libsdv_mw_rs_com_sdv_google_health_fake_bundle_rs",
+        ":libsdv_mw_rs_com_android_sdv_health_health_monitor_service_bundle_rs",
     ],
     use_expansive_default_srcs: false,
     rustlibs: [
@@ -44,6 +44,8 @@ rust_library {
         "libfutures",
         "libhealth_api",
         "libvsidl_v1_stdlib_proto_rs",
+        "libcom_android_sdv_health_health_monitor_registration_service_rpc_rs",
+        "libcom_android_sdv_health_health_monitor_service_rpc_rs",
         "libsdv_proto_reflection_rs",
     ],
     apex_available: [

@@ -14,7 +14,7 @@
 # proto-file: //system/software_defined_vehicle/vsidl/language/src/protos/sdv/vsidl/v1/syntax.proto
 # proto-message: VsidlEntry
 
-package: "com.sdv.sample_oem.health.monitored"
+package: "com.android.sdv.sample.oem.health.monitored"
 
 # Defining a service bundle sample which
 # - Registers at the local health monitor for service heartbeat monitoring
@@ -25,12 +25,12 @@ service_bundle {
 
   # Service bundle should register at HM for service heartbeat monitoring.
   client {
-    service: "com.sdv.google.health.HealthMonitorRegistrationService"
+    service: "com.android.sdv.health.HealthMonitorRegistrationService"
   }
 
   # Only local HealthMonitor should be allowed to read service heartbeats.
   publisher {
-    message: "com.sdv.google.health.ServiceHeartbeat"
+    message: "com.android.sdv.health.ServiceHeartbeat"
   }
 }
 
@@ -40,11 +40,11 @@ service_bundle {
 
   # Service bundle should register at HM for service heartbeat monitoring.
   client {
-    service: "com.sdv.google.health.HealthMonitorRegistrationService"
+    service: "com.android.sdv.health.HealthMonitorRegistrationService"
   }
 
   # Only local HealthMonitor should be allowed to read service heartbeats.
   publisher {
-    message: "com.sdv.google.health.ServiceHeartbeat"
+    message: "com.android.sdv.health.ServiceHeartbeat"
   }
 }

@@ -177,7 +177,7 @@ fn build_sd_query_for_all_suds_of_fqin(fqin: &ServiceFqin) -> SdvResult<UnitName
 }
 
 fn build_hb_unit_type() -> SdvResult<UnitType> {
-    const PACKAGE: &str = "com.sdv.google.health";
+    const PACKAGE: &str = "com.android.sdv.health";
     const BUNDLE: &str = "HealthMonitorServiceBundle";
     const TYPE_NAME: &str = "ServiceHeartbeat";
     UnitType::builder()
@@ -493,7 +493,7 @@ mod tests {
         let fqin = ServiceFqin::from_str(fqin).unwrap();
 
         let wrong_type = UnitType::builder()
-            .set_sdv_package_name("com.sdv.google.health")
+            .set_sdv_package_name("com.android.sdv.health")
             .set_service_bundle_name("HealthMonitorServiceBundle")
             .set_unit_type_name("ServiceHeartbreak")
             .build()

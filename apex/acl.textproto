@@ -18,19 +18,19 @@
 
 acls {
     name: "Internal"
-    include: "com.sdv.google.health.HealthMonitorServiceBundle"
+    include: "com.android.sdv.health.HealthMonitorServiceBundle"
 }
 
 acls {
     name: "MonitoringClients"
     include: "com.sdv.someip.SomeIpBroker"
-    include: "com.sdv.sample_oem.health.monitoring.VmHMBundle"
+    include: "com.android.sdv.sample.oem.health.monitoring.VmHMBundle"
 }
 
 acls {
     name: "MonitoredClients"
-    include: "com.sdv.sample_oem.*"
-    include: "com.andorid.sdv.performance.*"
+    include: "com.android.sdv.sample.oem.*"
+    include: "com.android.sdv.performance.*"
 }
 
 unit_types {
@@ -54,16 +54,16 @@ unit_types {
 }
 
 service_units {
-    name: "com-sdv-google-health-vm-health-unique"
+    name: "com-android-sdv-health-vm-health-unique"
     acl_names: "MonitoringClients"
 }
 
 service_units {
-    name: "com-sdv-google-health-health-monitor-service"
+    name: "com-android-sdv-health-health-monitor-service"
     acl_names: "MonitoringClients"
 }
 
 service_units {
-    name: "com-sdv-google-health-health-monitor-registration-service"
+    name: "com-android-sdv-health-health-monitor-registration-service"
     acl_names: "MonitoredClients"
 }

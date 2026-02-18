@@ -15,7 +15,7 @@
 use crate::async_trait;
 use crate::hb_config::HeartbeatMonitoringConfig;
 use crate::AuthorizationImpl;
-use com_sdv_google_health_health_monitor_registration_service_rpc::Interface as HealthMonitorRegistrationService;
+use com_android_sdv_health_health_monitor_registration_service_rpc::Interface as HealthMonitorRegistrationService;
 use health_api::health_monitor_registration_service::{
     RegisterConfigurationRequest, RegisterConfigurationResponse, UnregisterConfigurationRequest,
     UnregisterConfigurationResponse,

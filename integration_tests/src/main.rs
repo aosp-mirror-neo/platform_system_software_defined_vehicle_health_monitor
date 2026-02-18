@@ -34,7 +34,7 @@ mod tests {
 
     /// Default configuration path for the HM config.
     const HM_CONFIG_PATH_ENV_VAR: &str = "persist.sdv.health_monitor.config_path";
-    const SERVICE_BUNDLE_PACKAGE_NAME: &str = "com.sdv.sample_oem.health.monitored";
+    const SERVICE_BUNDLE_PACKAGE_NAME: &str = "com.android.sdv.sample.oem.health.monitored";
     const SECOND_SAMPLE_SERVICE_BUNDLE_NAME: &str = "SecondSampleHMBundle";
     const SAMPLE_SERVICE_BUNDLE_NAME: &str = "SampleHMBundle";
     const SERVICE_BUNDLE_INSTANCE_NAME: &str = "test1";

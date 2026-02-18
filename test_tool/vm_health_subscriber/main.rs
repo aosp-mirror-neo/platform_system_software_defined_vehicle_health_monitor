@@ -27,7 +27,7 @@ use sdv::comms::sd::ServiceUnitChangeEvent::Registered;
 use sdv::comms::sd::ServiceUnitDefinition;
 use sdv::comms::sd::UnitType;
 use sdv::comms::ContextRef;
-use sdv_mw_rs_com_sdv_google_health_health_monitor_service_bundle::UnitType as MwUnitType;
+use sdv_mw_rs_com_android_sdv_health_health_monitor_service_bundle::UnitType as MwUnitType;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::task::Context;
@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
 
     let fqin = ServiceFqin::builder()
         .sdv_vm_name("ignored")
-        .sdv_package_name("com.sdv.sample_oem.health.monitoring")
+        .sdv_package_name("com.android.sdv.sample.oem.health.monitoring")
         .service_bundle_name("VmHMBundle")
         .service_instance_name("instance1")
         .build()

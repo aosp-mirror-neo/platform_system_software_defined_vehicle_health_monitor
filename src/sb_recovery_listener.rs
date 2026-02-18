@@ -280,7 +280,7 @@ mod tests {
 
         let aidl_fqin = AidlServiceFqin {
             sdvVmName: "instance1".to_string(),
-            sdvPackageName: "com.sdv.sample_oem.health.monitored".to_string(),
+            sdvPackageName: "com.android.sdv.sample.oem.health.monitored".to_string(),
             serviceBundleName: "SampleHMBundle".to_string(),
             serviceInstanceName: "test1".to_string(),
         };

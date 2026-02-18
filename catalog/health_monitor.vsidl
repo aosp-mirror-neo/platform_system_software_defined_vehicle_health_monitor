@@ -14,7 +14,7 @@
 # proto-file: //system/software_defined_vehicle/vsidl/language/src/protos/sdv/vsidl/v1/syntax.proto
 # proto-message: VsidlEntry
 
-package: "com.sdv.google.health"
+package: "com.android.sdv.health"
 
 # Defining a VM Health Monitor Agent, which
 # subscribes to multiple topics for reading the service heartbeats of critical SDV services bundles

@@ -32,7 +32,7 @@ use sdv_health_monitor::{
     authorization::AuthorizationImpl, hb_monitor_factory::HeartbeatMonitorFactoryImpl,
     vm_config::Config, HealthMonitor,
 };
-use sdv_mw_rs_com_sdv_google_health_health_monitor_service_bundle::{
+use sdv_mw_rs_com_android_sdv_health_health_monitor_service_bundle::{
     publisher, HealthMonitorServiceBundle,
 };
 use sdv_mw_rs_sdv_comms::SdvComms;
@@ -124,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
 fn create_context() -> anyhow::Result<ContextRef> {
     let fqin_template = ServiceFqin::builder()
         .sdv_vm_name("ignored")
-        .sdv_package_name("com.sdv.google.health")
+        .sdv_package_name("com.android.sdv.health")
         .service_bundle_name("HealthMonitorServiceBundle")
         .service_instance_name("instance1")
         .build()?;

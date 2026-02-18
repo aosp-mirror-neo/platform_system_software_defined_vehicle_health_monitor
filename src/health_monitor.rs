@@ -21,7 +21,7 @@ use crate::monitor_model::EntityMonitor;
 use crate::sb_recovery_monitor::SBRecoveryMonitor;
 use async_trait::async_trait;
 use authorization::AuthorizationImpl;
-pub use com_sdv_google_health_health_monitor_service_rpc::Interface as HealthMonitorService;
+pub use com_android_sdv_health_health_monitor_service_rpc::Interface as HealthMonitorService;
 use health_api::{
     health_monitor_service::{
         ListAllServiceBundlesRequest, ListAllServiceBundlesResponse,

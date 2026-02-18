@@ -26,14 +26,14 @@
 use std::sync::{Arc, Mutex};
 use std::{io::stdin, str::FromStr};
 
-use com_sdv_google_health_health_monitor_registration_service_rpc::Client as HealthMonitorRegistrationServiceClient;
+use com_android_sdv_health_health_monitor_registration_service_rpc::Client as HealthMonitorRegistrationServiceClient;
 use health_api::health_config::HealthConfiguration;
 use health_api::health_monitor_registration_service::*;
 use health_api::health_topic::ServiceHeartbeat;
 use protobuf::well_known_types::timestamp::Timestamp;
 use sdv_comms::id::ServiceFqin;
 use sdv_comms::ContextRef;
-use sdv_mw_rs_com_sdv_sample_oem_health_monitored_sample_hm_bundle::SampleHMBundle;
+use sdv_mw_rs_com_android_sdv_sample_oem_health_monitored_sample_hm_bundle::SampleHMBundle;
 use sdv_mw_rs_comms::{Communicate, Publisher, RpcClient};
 use sdv_mw_rs_sdv_comms::SdvComms;
 use std::sync::atomic::AtomicBool;
@@ -127,7 +127,7 @@ async fn new_dt_publisher(comms: Arc<SdvComms>) -> Mutex<Publisher<ServiceHeartb
     let mut bundle: SampleHMBundle = SampleHMBundle::new(comms).await.unwrap();
     Mutex::new(bundle
         .take_publisher::<ServiceHeartbeat>(
-            sdv_mw_rs_com_sdv_sample_oem_health_monitored_sample_hm_bundle::publisher::Variant::UNIQUE,
+            sdv_mw_rs_com_android_sdv_sample_oem_health_monitored_sample_hm_bundle::publisher::Variant::UNIQUE,
         )
         .unwrap())
 }
@@ -135,7 +135,7 @@ async fn new_dt_publisher(comms: Arc<SdvComms>) -> Mutex<Publisher<ServiceHeartb
 async fn register_health_config(comms: Arc<SdvComms>, health_configuration: HealthConfiguration) {
     let unit_name = sdv_mw_rs_comms::UnitName::builder()
         .vm_name(comms.context.get_self_fqin().get_sdv_vm_name().to_string())
-        .package_name("com.sdv.google.health".to_string())
+        .package_name("com.android.sdv.health".to_string())
         .bundle_name("HealthMonitorServiceBundle".to_string())
         .service_unit_name(HealthMonitorRegistrationServiceClient::DEFAULT_UNIT_NAME.to_string())
         .build()
@@ -159,7 +159,7 @@ async fn register_health_config(comms: Arc<SdvComms>, health_configuration: Heal
 async fn deregister_health_config(comms: Arc<SdvComms>) {
     let unit_name = sdv_mw_rs_comms::UnitName::builder()
         .vm_name(comms.context.get_self_fqin().get_sdv_vm_name().to_string())
-        .package_name("com.sdv.google.health".to_string())
+        .package_name("com.android.sdv.health".to_string())
         .bundle_name("HealthMonitorServiceBundle".to_string())
         .service_unit_name(HealthMonitorRegistrationServiceClient::DEFAULT_UNIT_NAME.to_string())
         .build()
