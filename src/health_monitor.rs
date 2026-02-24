@@ -586,6 +586,45 @@ pub mod tests {
         assert!(fqins.contains(&created_fqin.to_string()));
     }
 
+    #[tokio::test]
+    async fn test_list_unhealthy_monitored_service_bundles() {
+        let healthy_fqin = ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).unwrap();
+        let unhealthy_fqin = ServiceFqin::from_str(UNHEALTHY_SERVICE_FQIN_STR).unwrap();
+
+        let hb_monitors_map = HashMap::from([
+            (
+                healthy_fqin.clone(),
+                Box::new(TestMonitor { healthy: EntityHealthStatus::Healthy, ..Default::default() })
+                    as Box<dyn EntityMonitor>,
+            ),
+            (
+                unhealthy_fqin.clone(),
+                Box::new(TestMonitor {
+                    healthy: EntityHealthStatus::Unhealthy,
+                    ..Default::default()
+                }) as Box<dyn EntityMonitor>,
+            ),
+        ]);
+
+        let (_tx, sb_recovery_monitors) = watch::channel(HashMap::new());
+        let (_tx, hb_monitors) = watch::channel(hb_monitors_map);
+
+        let monitor_manager =
+            MonitorManager::new_for_test(sb_recovery_monitors, hb_monitors, HashMap::new());
+        let hm = HealthMonitor::new(Arc::new(monitor_manager));
+
+        let request = ListUnhealthyMonitoredServiceBundlesRequest { ..Default::default() };
+        let response = hm
+            .ListUnhealthyMonitoredServiceBundles(
+                ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).expect("Valid Fqin"),
+                &request,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.fqin, vec![unhealthy_fqin.to_string()]);
+    }
+
     pub mod utils {
         use std::io::Write;
         pub struct StringWriter {
