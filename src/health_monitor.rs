@@ -18,7 +18,7 @@ use crate::monitor_manager::MonitorManager;
 use crate::monitor_model::AgentName;
 use crate::monitor_model::EntityHealthStatus;
 use crate::monitor_model::EntityMonitor;
-use crate::sb_recovery_monitor::{SBRecoveryMonitor, SBRecoveryState};
+use crate::sb_recovery_monitor::{SBLifecycleState, SBRecoveryMonitor, SBRecoveryState};
 use async_trait::async_trait;
 use authorization::AuthorizationImpl;
 pub use com_android_sdv_health_health_monitor_service_rpc::Interface as HealthMonitorService;
@@ -166,10 +166,20 @@ impl HealthMonitorService for HealthMonitor {
         _fqin: sdv_comms::id::ServiceFqin,
         _request: &ListAllServiceBundlesRequest,
     ) -> sdv_status_rs::SdvResult<ListAllServiceBundlesResponse> {
-        Err(sdv_status_rs::SdvStatus::with_message(
-            sdv_status_rs::SdvStatusCode::Unimplemented,
-            "Health Monitor doesn't support ListAllServiceBundles, it will be implemented in future",
-        ))
+        let running_bundles = self
+            .monitor_manager
+            .sb_recovery_monitors
+            .borrow()
+            .iter()
+            .filter(|(_, orch_state)| {
+                orch_state.recovery_state == SBRecoveryState::Normal
+                    && (orch_state.lifecycle_state == SBLifecycleState::Created
+                        || orch_state.lifecycle_state == SBLifecycleState::Started)
+            })
+            .map(|(fqin, _)| fqin.to_string())
+            .collect();
+
+        Ok(ListAllServiceBundlesResponse { fqin: running_bundles, ..Default::default() })
     }
 
     #[instrument(skip(self))]
@@ -246,7 +256,6 @@ pub mod tests {
     use crate::tests::utils::StringWriter;
     use mockall::predicate::eq;
     use sdv_comms::id::ServiceFqin;
-    use sdv_status_rs::SdvStatusCode;
     use std::str::FromStr;
     use tokio::sync::mpsc;
     use tokio::sync::watch;
@@ -519,23 +528,47 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_all_services_unimplemented() {
-        let hm = {
-            let (hb_registration_commands_sink, hb_registration_commands) = mpsc::channel(1);
-            let (_, hb_recovery_events) = mpsc::channel(1);
-            let (_, qos_events) = mpsc::channel(1);
-            let monitor_manager = MonitorManager::new(
-                ImplicitMonitoringConfigRepo::new().into(),
-                hb_registration_commands,
-                hb_registration_commands_sink,
-                hb_recovery_events,
-                HashMap::new(),
-                MockHeartbeatMonitorFactory::new(),
-                qos_events,
-            );
-            let monitor_manager = Arc::new(monitor_manager);
-            HealthMonitor::new(monitor_manager)
-        };
+    async fn test_list_all_service_bundles() {
+        let running_fqin = ServiceFqin::from_str("vm:com.google.test.Running/instance").unwrap();
+        let created_fqin = ServiceFqin::from_str("vm:com.google.test.Created/instance").unwrap();
+
+        let sb_recovery_monitors_map = HashMap::from([
+            (
+                running_fqin.clone(),
+                SBOrchestrationState {
+                    recovery_state: SBRecoveryState::Normal,
+                    lifecycle_state: SBLifecycleState::Started,
+                },
+            ),
+            (
+                created_fqin.clone(),
+                SBOrchestrationState {
+                    recovery_state: SBRecoveryState::Normal,
+                    lifecycle_state: SBLifecycleState::Created,
+                },
+            ),
+            (
+                ServiceFqin::from_str("vm:com.google.test.Crashing/instance").unwrap(),
+                SBOrchestrationState {
+                    recovery_state: SBRecoveryState::FailedRecovery,
+                    lifecycle_state: SBLifecycleState::Created,
+                },
+            ),
+            (
+                ServiceFqin::from_str("vm:com.google.test.Destroyed/instance").unwrap(),
+                SBOrchestrationState {
+                    recovery_state: SBRecoveryState::Normal,
+                    lifecycle_state: SBLifecycleState::Destroyed,
+                },
+            ),
+        ]);
+
+        let (_tx, sb_recovery_monitors) = watch::channel(sb_recovery_monitors_map);
+        let (_tx, hb_monitors) = watch::channel(HashMap::new());
+
+        let monitor_manager =
+            MonitorManager::new_for_test(sb_recovery_monitors, hb_monitors, HashMap::new());
+        let hm = HealthMonitor::new(Arc::new(monitor_manager));
 
         let request = ListAllServiceBundlesRequest { ..Default::default() };
 
@@ -544,10 +577,13 @@ pub mod tests {
                 ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).expect("Valid Fqin"),
                 &request,
             )
-            .await;
+            .await
+            .unwrap();
 
-        assert!(response.is_err());
-        assert_eq!(response.unwrap_err().status_code(), SdvStatusCode::Unimplemented);
+        let fqins = response.fqin;
+        assert_eq!(fqins.len(), 2);
+        assert!(fqins.contains(&running_fqin.to_string()));
+        assert!(fqins.contains(&created_fqin.to_string()));
     }
 
     pub mod utils {
