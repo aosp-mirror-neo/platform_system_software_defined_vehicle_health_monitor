@@ -11,8 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# proto-file: //system/software_defined_vehicle/middleware/service_authz/proto/sdv/authz/policy/acl_policy.proto
-# proto-message: AclPolicy
+# proto-file: //system/software_defined_vehicle/middleware/service_authz/proto/sdv/authz/policy/authz_policy.proto
+# proto-message: AuthzPolicy
 
 # ACL policies for HealthMonitor Unit Types.
 
