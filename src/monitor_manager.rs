@@ -95,6 +95,24 @@ impl MonitorManager {
         }
     }
 
+    #[cfg(test)]
+    pub fn new_for_test(
+        sb_recovery_monitors: watch::Receiver<HashMap<ServiceFqin, SBRecoveryMonitor>>,
+        hb_monitors: watch::Receiver<HashMap<ServiceFqin, Box<dyn EntityMonitor>>>,
+        agent_crash_monitors: HashMap<AgentName, Box<dyn EntityMonitor>>,
+    ) -> Self {
+        let (_, qos_monitors) = watch::channel(HashMap::new());
+        Self {
+            sb_recovery_events_processing: tokio::spawn(async {}),
+            hb_registration_commands_processing: tokio::spawn(async {}),
+            qos_registration_commands_processing: tokio::spawn(async {}),
+            sb_recovery_monitors,
+            agent_crash_monitors,
+            hb_monitors,
+            qos_monitors,
+        }
+    }
+
     async fn create_implicit_hb_registration_command(
         incoming_event: ServiceBundleRecoveryEvent,
         current_state: Option<SBOrchestrationState>,

@@ -18,7 +18,7 @@ use crate::monitor_manager::MonitorManager;
 use crate::monitor_model::AgentName;
 use crate::monitor_model::EntityHealthStatus;
 use crate::monitor_model::EntityMonitor;
-use crate::sb_recovery_monitor::SBRecoveryMonitor;
+use crate::sb_recovery_monitor::{SBRecoveryMonitor, SBRecoveryState};
 use async_trait::async_trait;
 use authorization::AuthorizationImpl;
 pub use com_android_sdv_health_health_monitor_service_rpc::Interface as HealthMonitorService;
@@ -178,10 +178,16 @@ impl HealthMonitorService for HealthMonitor {
         _fqin: sdv_comms::id::ServiceFqin,
         _request: &ListCrashingServiceBundlesRequest,
     ) -> sdv_status_rs::SdvResult<ListCrashingServiceBundlesResponse> {
-        Err(sdv_status_rs::SdvStatus::with_message(
-            sdv_status_rs::SdvStatusCode::Unimplemented,
-            "Health Monitor doesn't support ListCrashingServiceBundles, it will be implemented in future",
-        ))
+        let crashing_bundles = self
+            .monitor_manager
+            .sb_recovery_monitors
+            .borrow()
+            .iter()
+            .filter(|(_, orch_state)| orch_state.recovery_state == SBRecoveryState::FailedRecovery)
+            .map(|(fqin, _)| fqin.to_string())
+            .collect();
+
+        Ok(ListCrashingServiceBundlesResponse { fqin: crashing_bundles, ..Default::default() })
     }
 
     #[instrument(skip(self))]
@@ -243,6 +249,7 @@ pub mod tests {
     use sdv_status_rs::SdvStatusCode;
     use std::str::FromStr;
     use tokio::sync::mpsc;
+    use tokio::sync::watch;
 
     static HEALTHY_SERVICE_FQIN_STR: &str = "vm:com.google.sdv.HealthyServiceBundle/sample";
     static UNHEALTHY_SERVICE_FQIN_STR: &str = "vm:com.google.sdv.UnhealthyServiceBundle/sample";
@@ -471,23 +478,32 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_crashes_unimplemented() {
-        let hm = {
-            let (hb_registration_commands_sink, hb_registration_commands) = mpsc::channel(1);
-            let (_, hb_recovery_events) = mpsc::channel(1);
-            let (_, qos_events) = mpsc::channel(1);
-            let monitor_manager = MonitorManager::new(
-                ImplicitMonitoringConfigRepo::new().into(),
-                hb_registration_commands,
-                hb_registration_commands_sink,
-                hb_recovery_events,
-                HashMap::new(),
-                MockHeartbeatMonitorFactory::new(),
-                qos_events,
-            );
-            let monitor_manager = Arc::new(monitor_manager);
-            HealthMonitor::new(monitor_manager)
-        };
+    async fn test_list_crashing_service_bundles() {
+        let crashing_fqin = ServiceFqin::from_str("vm:com.google.test.Crashing/instance").unwrap();
+
+        let sb_recovery_monitors_map = HashMap::from([
+            (
+                ServiceFqin::from_str("vm:com.google.test.Running/instance").unwrap(),
+                SBOrchestrationState {
+                    recovery_state: SBRecoveryState::Normal,
+                    lifecycle_state: SBLifecycleState::Started,
+                },
+            ),
+            (
+                crashing_fqin.clone(),
+                SBOrchestrationState {
+                    recovery_state: SBRecoveryState::FailedRecovery,
+                    lifecycle_state: SBLifecycleState::Created,
+                },
+            ),
+        ]);
+
+        let (_tx, sb_recovery_monitors) = watch::channel(sb_recovery_monitors_map);
+        let (_tx, hb_monitors) = watch::channel(HashMap::new());
+
+        let monitor_manager =
+            MonitorManager::new_for_test(sb_recovery_monitors, hb_monitors, HashMap::new());
+        let hm = HealthMonitor::new(Arc::new(monitor_manager));
 
         let request = ListCrashingServiceBundlesRequest { ..Default::default() };
 
@@ -496,10 +512,10 @@ pub mod tests {
                 ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).expect("Valid Fqin"),
                 &request,
             )
-            .await;
+            .await
+            .unwrap();
 
-        assert!(response.is_err());
-        assert_eq!(response.unwrap_err().status_code(), SdvStatusCode::Unimplemented);
+        assert_eq!(response.fqin, vec![crashing_fqin.to_string()]);
     }
 
     #[tokio::test]
