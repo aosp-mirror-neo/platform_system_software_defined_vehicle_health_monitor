@@ -19,7 +19,7 @@ rust_binary {
     ],
     prefer_rlib: true,
     rustlibs: [
-        "google.sdv.service_bundles_registry-V2-rust",
+        "google.sdv.service_bundles_registry-V3-rust",
         "libanyhow",
         "libcom_android_sdv_health_health_monitor_registration_service_rpc_rs",
         "libfutures",
