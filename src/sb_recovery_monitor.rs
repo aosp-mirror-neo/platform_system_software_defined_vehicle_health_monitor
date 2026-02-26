@@ -35,7 +35,7 @@ pub enum SBLifecycleState {
     Destroyed,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SBOrchestrationState {
     pub(crate) recovery_state: SBRecoveryState,
     pub(crate) lifecycle_state: SBLifecycleState,
