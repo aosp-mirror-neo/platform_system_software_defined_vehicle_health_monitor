@@ -26,19 +26,27 @@ service_bundle {
 
   server {
     service: "HealthMonitorRegistrationService"
+    channel: "health-monitor-registration-service"
   }
   server {
     service: "HealthMonitorService"
+    channel: "health-monitor-service"
   }
 
-  publisher { message: "VmHealth" }
-
-  subscriber{ message: "ServiceHeartbeat"}
+  publisher {
+    message: "VmHealth"
+    topic: "vm-health"
+    capacity: 10
+  }
 }
 
 # Define a publisher for ServiceHeartbeat for runtime config generation (`generate_hm_stable_topic_mappings`)
 # to succeed - Will be addressed by b/380246543
 service_bundle {
   name: "FakeBundle"
-  publisher { message: "ServiceHeartbeat"}
+  publisher {
+    message: "ServiceHeartbeat"
+    topic: "fake-bundle-heartbeats"
+    capacity: 2
+  }
 }

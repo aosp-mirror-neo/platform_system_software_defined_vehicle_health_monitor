@@ -53,6 +53,11 @@ unit_types {
     acl_names: "MonitoredClients"
 }
 
+unit_types {
+    name: "QosHeartbeat"
+    acl_names: "MonitoredClients"
+}
+
 service_units {
     name: "com-android-sdv-health-vm-health-unique"
     acl_names: "MonitoringClients"
