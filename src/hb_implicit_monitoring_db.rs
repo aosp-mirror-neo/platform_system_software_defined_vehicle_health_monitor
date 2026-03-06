@@ -28,26 +28,36 @@ use sdv_status_rs::{SdvResult, SdvStatus, SdvStatusCode};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::OnceCell;
 
+#[derive(Debug)]
 pub struct InstanceConfig {
     pub hb_config: Option<HeartbeatMonitoringConfig>,
     pub qos_config: HashMap<String, QosConfig>, // key: topic, value: QosConfig
 }
 
-pub struct ImplicitMonitoringConfigRepo(OnceCell<HashMap<ServiceFqin, InstanceConfig>>);
+pub struct ImplicitMonitoringConfigRepo {
+    data: OnceCell<HashMap<ServiceFqin, InstanceConfig>>,
+    vm_name_provider: Arc<dyn Fn() -> String + Send + Sync>,
+}
 
 impl ImplicitMonitoringConfigRepo {
+    pub fn new(vm_name_provider: Arc<dyn Fn() -> String + Send + Sync>) -> Self {
+        ImplicitMonitoringConfigRepo { data: OnceCell::default(), vm_name_provider }
+    }
+
     async fn get_sb_instance_config(
         &self,
         fqin: &ServiceFqin,
     ) -> SdvResult<Option<&InstanceConfig>> {
-        Ok(self
-            .0
+        let vm_name_provider = Arc::clone(&self.vm_name_provider);
+        self.data
             .get_or_try_init(|| async {
-                tokio::task::spawn_blocking(|| {
-                    retrieve_implicit_health_config_from_sbr(get_bundle_metadata)
+                tokio::task::spawn_blocking(move || {
+                    let vm_name = vm_name_provider();
+                    retrieve_implicit_health_config_from_sbr(get_bundle_metadata, &vm_name)
                 })
                 .await
                 .map_err(|e| {
@@ -55,7 +65,8 @@ impl ImplicitMonitoringConfigRepo {
                 })
             })
             .await?
-            .get(fqin))
+            .get(fqin)
+            .pipe(Ok)
     }
 
     pub async fn get_implicit_hb_config(
@@ -71,16 +82,12 @@ impl ImplicitMonitoringConfigRepo {
     ) -> SdvResult<Option<&HashMap<String, QosConfig>>> {
         self.get_sb_instance_config(fqin).await?.map(|c| &c.qos_config).pipe(Ok)
     }
-
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        ImplicitMonitoringConfigRepo(OnceCell::default())
-    }
 }
 
 /// NOTE: might block thread. Use separate run_blocking
 fn retrieve_implicit_health_config_from_sbr(
     get_bundle_metadata: impl FnOnce() -> Vec<ServiceBundleMetadata>,
+    vm_name: &str,
 ) -> HashMap<ServiceFqin, InstanceConfig> {
     get_bundle_metadata()
         .into_iter()
@@ -102,7 +109,7 @@ fn retrieve_implicit_health_config_from_sbr(
                 .map(move |(instance, config)| {
                     (
                         ServiceFqin::builder()
-                            .sdv_vm_name("ignored")
+                            .sdv_vm_name(vm_name)
                             .sdv_package_name(&package)
                             .service_bundle_name(&name)
                             .service_instance_name(&instance)
@@ -211,7 +218,10 @@ pub mod tests {
 
         impl ImplicitMonitoringConfigRepo {
             pub fn new_for_testing(inner: HashMap<ServiceFqin, InstanceConfig>) -> Self {
-                Self(OnceCell::new_with(Some(inner)))
+                Self {
+                    data: OnceCell::new_with(Some(inner)),
+                    vm_name_provider: Arc::new(|| "testvm".to_string()),
+                }
             }
         }
     }
@@ -219,20 +229,20 @@ pub mod tests {
     #[tokio::test]
     async fn test_retrieve_config_success_when_config_exists() {
         let fqin = ServiceFqin::builder()
-            .sdv_vm_name("ignored")
+            .sdv_vm_name("testvm")
             .sdv_package_name("my.package")
             .service_bundle_name("CoolBundle")
             .service_instance_name("instance1")
             .build()
             .unwrap();
 
-        let db = ImplicitMonitoringConfigRepo(OnceCell::new_with(Some(HashMap::from([(
+        let db = ImplicitMonitoringConfigRepo::new_for_testing(HashMap::from([(
             fqin.clone(),
             InstanceConfig {
                 hb_config: Some(HeartbeatMonitoringConfig::default()),
                 qos_config: HashMap::default(),
             },
-        )]))));
+        )]));
 
         assert!(db.get_sb_instance_config(&fqin).await.unwrap().is_some())
     }
@@ -240,14 +250,14 @@ pub mod tests {
     #[tokio::test]
     async fn test_retrieve_config_error_when_config_missing() {
         let fqin = ServiceFqin::builder()
-            .sdv_vm_name("ignored")
+            .sdv_vm_name("testvm")
             .sdv_package_name("my.package")
             .service_bundle_name("CoolBundle")
             .service_instance_name("instance1")
             .build()
             .unwrap();
 
-        let db = ImplicitMonitoringConfigRepo(OnceCell::new_with(Some(HashMap::default())));
+        let db = ImplicitMonitoringConfigRepo::new_for_testing(HashMap::default());
 
         assert!(db.get_sb_instance_config(&fqin).await.unwrap().is_none())
     }
@@ -329,7 +339,7 @@ pub mod tests {
         let bundle_with_invalid_config = "BundleWithInvalidConfig";
 
         let fqin1 = ServiceFqin::builder()
-            .sdv_vm_name("ignored")
+            .sdv_vm_name("testvm")
             .sdv_package_name(my_package)
             .service_bundle_name(my_bundle)
             .service_instance_name("instance1")
@@ -337,7 +347,7 @@ pub mod tests {
             .unwrap();
 
         let fqin2 = ServiceFqin::builder()
-            .sdv_vm_name("ignored")
+            .sdv_vm_name("testvm")
             .sdv_package_name(my_package)
             .service_bundle_name(my_bundle)
             .service_instance_name("instance2")
@@ -345,7 +355,7 @@ pub mod tests {
             .unwrap();
 
         let fqin3 = ServiceFqin::builder()
-            .sdv_vm_name("ignored")
+            .sdv_vm_name("testvm")
             .sdv_package_name(my_package)
             .service_bundle_name(my_other_bundle)
             .service_instance_name("instance1")
@@ -353,7 +363,7 @@ pub mod tests {
             .unwrap();
 
         let fqin4 = ServiceFqin::builder()
-            .sdv_vm_name("ignored")
+            .sdv_vm_name("testvm")
             .sdv_package_name(my_package)
             .service_bundle_name(my_other_bundle)
             .service_instance_name("instance2")
@@ -361,7 +371,7 @@ pub mod tests {
             .unwrap();
 
         let fqin5 = ServiceFqin::builder()
-            .sdv_vm_name("ignored")
+            .sdv_vm_name("testvm")
             .sdv_package_name(my_package)
             .service_bundle_name(bundle_with_invalid_config)
             .service_instance_name("any")
@@ -401,7 +411,7 @@ pub mod tests {
         ]);
 
         // ACT
-        let config_db = retrieve_implicit_health_config_from_sbr(move || metadata);
+        let config_db = retrieve_implicit_health_config_from_sbr(move || metadata, "testvm");
 
         // ASSERT
         assert!(config_db.contains_key(&fqin1));

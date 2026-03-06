@@ -82,7 +82,9 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(PowerStateReceiverFactoryImpl::new()),
     );
 
-    let sbr_config_repo = Arc::new(ImplicitMonitoringConfigRepo::new());
+    let sbr_config_repo = Arc::new(ImplicitMonitoringConfigRepo::new(Arc::new(move || {
+        context.get_self_fqin().get_sdv_vm_name().to_string()
+    })));
     let (_qos_registration, qos_commands) =
         QosRegistrationListener::new::<CommsImpl>(context, sd, Arc::clone(&sbr_config_repo));
     let monitor_manager = MonitorManager::new(

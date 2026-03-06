@@ -16,7 +16,7 @@ use health_api::health_config::QosMonitoringConfiguration;
 use sdv_status_rs::{SdvStatus, SdvStatusCode};
 use std::time::Duration;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct QosConfig {
     pub latency_threshold: Option<Duration>,
     // Monitors the frequency of the communication. Allowed max period between two heartbeats

@@ -90,7 +90,7 @@ async fn send_qos_registration_command<T: Comms>(
     let config = config_db.get_qos_config(fqin).await?.and_then(|r| r.get(&topic)).ok_or(
         SdvStatus::with_message(
             SdvStatusCode::NotFound,
-            "QoS config not registered with SBR for this topic:{topic}",
+            "Qos config not registered with SBR for this topic:{topic}",
         ),
     )?;
 
@@ -147,9 +147,9 @@ impl QosMonitorId {
 }
 
 fn build_qos_hb_unit_type() -> SdvResult<UnitType> {
-    const PACKAGE: &str = "com.sdv.google.health";
-    const BUNDLE: &str = "HealthMonitorServiceBundle";
-    const TYPE_NAME: &str = "QualityOfServiceHeartbeat";
+    const PACKAGE: &str = "com.android.sdv.health";
+    const BUNDLE: &str = "";
+    const TYPE_NAME: &str = "QosHeartbeat";
     UnitType::builder()
         .set_sdv_package_name(PACKAGE)
         .set_service_bundle_name(BUNDLE)

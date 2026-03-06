@@ -279,7 +279,7 @@ pub mod tests {
             let (_, hb_recovery_events) = mpsc::channel(1);
             let (_, qos_events) = mpsc::channel(1);
             let monitor_manager = MonitorManager::new(
-                ImplicitMonitoringConfigRepo::new().into(),
+                ImplicitMonitoringConfigRepo::new(Arc::new(|| "testvm".to_string())).into(),
                 hb_registration_commands,
                 hb_registration_commands_sink,
                 hb_recovery_events,
@@ -680,7 +680,7 @@ pub mod tests {
             let (_, hb_recovery_events) = mpsc::channel(1);
             let (_, qos_events) = mpsc::channel(1);
             let monitor_manager = MonitorManager::new(
-                ImplicitMonitoringConfigRepo::new().into(),
+                ImplicitMonitoringConfigRepo::new(Arc::new(|| "testvm".to_string())).into(),
                 hb_registration_commands,
                 hb_registration_commands_sink,
                 hb_recovery_events,
