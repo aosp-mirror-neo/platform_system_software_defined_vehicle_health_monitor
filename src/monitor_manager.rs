@@ -135,7 +135,7 @@ impl MonitorManager {
                 (incoming_event, current_state)
             })
             .inspect(|(incoming, current)| {
-                if Some(incoming.state.recovery_state) != current.map(|c| c.recovery_state) {
+                if Some(incoming.state) != *current {
                     recovery_monitors_sink.send_modify(|monitors| {
                         utils::insert(monitors, &incoming.fqin, incoming.state);
                     });
@@ -581,6 +581,29 @@ mod tests {
             {
                 let monitors = monitor_rx.borrow_and_update();
                 assert_eq!(monitors.get(&fqin1).unwrap().recovery_state, SBRecoveryState::Normal);
+            }
+
+            // A new event with same recovery state but different lifecycle state should update the
+            // monitor
+            event_tx
+                .send(ServiceBundleRecoveryEvent {
+                    fqin: fqin1.clone(),
+                    state: SBOrchestrationState {
+                        recovery_state: SBRecoveryState::Normal,
+                        lifecycle_state: SBLifecycleState::Started,
+                    },
+                })
+                .await
+                .unwrap();
+
+            timeout(Duration::from_millis(200), monitor_rx.changed()).await.unwrap().unwrap();
+            {
+                let monitors = monitor_rx.borrow_and_update();
+                assert_eq!(monitors.get(&fqin1).unwrap().recovery_state, SBRecoveryState::Normal);
+                assert_eq!(
+                    monitors.get(&fqin1).unwrap().lifecycle_state,
+                    SBLifecycleState::Started
+                );
             }
 
             drop(event_tx);
