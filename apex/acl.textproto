@@ -23,7 +23,7 @@ acls {
 
 acls {
     name: "MonitoringClients"
-    include: "com.sdv.someip.SomeIpBroker"
+    include: "com.android.sdv.someip.SomeIpBroker"
     include: "com.android.sdv.sample.oem.health.monitoring.VmHMBundle"
 }
 
