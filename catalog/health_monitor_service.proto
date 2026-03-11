@@ -21,8 +21,8 @@ import "health_config.proto";
 // RPC Interface of the VM Health Monitor Agent for querying details about the current VM
 // health.
 service HealthMonitorService {
-  // Returns the list of SDV service bundles that were created or started by the orchestrator on
-  // this VM.
+  // Returns the list of currently running SDV service bundles that were created or started
+  // by the orchestrator on this VM.
   rpc ListAllServiceBundles(ListAllServiceBundlesRequest) returns (ListAllServiceBundlesResponse) {}
 
   // Returns the list of crashed SDV service bundles.

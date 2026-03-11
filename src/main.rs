@@ -21,12 +21,13 @@ use sdv_comms::sd::ServiceDiscoveryManager;
 use sdv_comms::{id::ServiceFqin, ContextRef};
 use sdv_dump::DumpBinderConnection;
 use sdv_health_monitor::agent_monitor::create_agent_monitor_entries;
+use sdv_health_monitor::commstack_trait::CommsImpl;
 use sdv_health_monitor::hb_explicit_registration::HBRegistrationListener;
 use sdv_health_monitor::hb_implicit_monitoring_db::ImplicitMonitoringConfigRepo;
-use sdv_health_monitor::hb_monitor_factory::CommsImpl;
 use sdv_health_monitor::monitor_manager::MonitorManager;
 use sdv_health_monitor::power_state::PowerStateReceiverFactory;
 use sdv_health_monitor::power_state::PowerStateReceiverFactoryImpl;
+use sdv_health_monitor::qos_registration_listener::QosRegistrationListener;
 use sdv_health_monitor::sb_recovery_listener::SbRecoveryEventSourceImpl;
 use sdv_health_monitor::{
     authorization::AuthorizationImpl, hb_monitor_factory::HeartbeatMonitorFactoryImpl,
@@ -67,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
     let id = context.get_self_fqin();
     dm.set_self_fqin(id.to_string());
     dm.set_agent_state("FQIN retrieved");
-    let sd = ServiceDiscoveryManager::new(context);
+    let sd = Arc::new(ServiceDiscoveryManager::new(context));
 
     let agent_monitors = create_agent_monitor_entries(
         config.monitored_binders,
@@ -77,16 +78,21 @@ async fn main() -> anyhow::Result<()> {
     let (hb_registration_commands_tx, hb_registration_commands_rx) = mpsc::channel(100);
     let hb_monitor_factory = HeartbeatMonitorFactoryImpl::<CommsImpl>::new(
         context,
-        sd,
+        Arc::clone(&sd),
         Arc::new(PowerStateReceiverFactoryImpl::new()),
     );
+
+    let sbr_config_repo = Arc::new(ImplicitMonitoringConfigRepo::new());
+    let (_qos_registration, qos_commands) =
+        QosRegistrationListener::new::<CommsImpl>(context, sd, Arc::clone(&sbr_config_repo));
     let monitor_manager = MonitorManager::new(
-        ImplicitMonitoringConfigRepo::new(),
+        sbr_config_repo,
         hb_registration_commands_rx,
         hb_registration_commands_tx.clone(), // mpsc, cheap clone
         sb_recovery_events,
         agent_monitors,
         hb_monitor_factory,
+        qos_commands,
     );
     let monitor_manager = Arc::new(monitor_manager);
     dm.add_reporter("Recovery monitor manager", &monitor_manager);

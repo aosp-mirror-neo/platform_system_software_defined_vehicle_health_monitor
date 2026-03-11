@@ -16,68 +16,116 @@ syntax = "proto3";
 
 package com.android.sdv.health;
 
-// Service bundle implicit health monitoring configuration.
-
-// The SB instance must publish heartbeats as soon as it has reached STARTED orchestration state,
-// with the initial delay configurabe via the `initial_delay_ms` field. Implicit monitoring does not
-// require manual registration via RPC, from the service bundle instances.
-
-// The alternative to implicit monitoring is explicit monitoring, which uses RPC to register to and
-// deregister from Hearbeat monitoring. This allows to customise the monitoring period. See also:
-// `${ANDROID_ROOT}/system/software_defined_vehicle/service_bundles_registry/proto/health_monitor_registration_service.proto`
-
-// To use implicit heartbeat monitoring, the service bundle must link a .textproto file of type
-// `ServiceBundleHealthConfiguration` as part of its ServiceBundleManifest. See also:
-// `${ANDROID_ROOT}/system/software_defined_vehicle/service_bundles_registry/proto/sdv_service_bundle_manifest.proto`
+// **Service bundle health configuration root message.**
+//
+// To use health monitoring or QoS monitoring features, the service bundle must
+// reference a .textproto file of type `ServiceBundleHealthConfiguration` as part of
+// its ServiceBundleManifest (`health_config_path` field). See also:
+// `${ANDROID_ROOT}/system/software_defined_vehicle/service_bundles_registry/proto/sdv_service_bundles_manifest.proto`
 message ServiceBundleHealthConfiguration {
-  // Key should contain the instance name that the `HealthConfiguration` applies to.
-  map<string, HealthConfiguration> instance_config = 1;
+  // Required: An empty ServiceBundleHealthConfiguration is equivalent to no
+  // implicit health monitoring or QoS monitoring configured.
+  //
+  // Key should contain the instance name that the `InstanceConfiguration` applies to.
+  map<string, InstanceConfiguration> instance_config = 1;
+}
+
+// Service bundle *instance* configuration.
+message InstanceConfiguration {
+  // Optional.
+  //
+  // Instance health monitoring configuration. Monitors instance's
+  // general health. Well suited for bundles executing periodic tasks.
+  optional HealthConfiguration health_config = 1;
+
+  // Optional.
+  //
+  // Map defining qos monitoring profile of instance.
+  // The key(string) is the topic name of the specific QoS Heartbeat
+  // publication. A meaningful topic name should be chosen, for
+  // expressive Health Monitor reporting.
+  //
+  // Only one publisher should publish on this topic. Health Monitor
+  // agent will ignore all publishers but the first one registered
+  // by the service bundle instance configured for QoS monitoring.
+  map<string, QosMonitoringConfiguration> qos_config = 2;
 }
 
 // Service bundle *instance* health monitoring configuration.
 //
-// This configures the VM Health Monitor to expect a certain heartbeat rythm from the SB instance.
+// This configures the VM Health Monitor to expect a certain heartbeat rythm
+// from the SB instance. Use this type of monitoring to ensure that your
+// bundle instance is alive and behaving correctly: that is, it executes a
+// desired logic periodically.
 //
-// * If SB bundle opts for explicit heartbeat registration, `HealthConfiguration` should be
-// registered with the VM Health Monitor through it's registration RPC channel.
-// * If SB bundle opts for implicit heartbeat registration, `HealthConfiguration` is part of the
-// `ServiceBundleHealthConfiguration` map.
-//
-// The service bundle is considered unhealthy if its service heartbeats are missing or delayed,
-// Namely:
+// The service bundle is considered unhealthy if its service heartbeats are
+// missing or delayed, Namely:
 // 1. The time passed between registration t_{0} and reporting the first
 // heartbeat t_{1} exceeds the initial delay t_{init}: t > t_{1} - t_{0},
-// 2. The time duration between two consecutive heartbeats (t_{i}, t_{i-1}) exceeds the sum of
-// reporting periods p multiplied by the number of periods N and task duration t_{exec}: t_{i} -
-// t_{i-1} > p*N + t_{exec}, or
-// 3. The time duration between the observation and the last reported heartbeat (t_{o}, t_{last})
-// exceeds the sum of reporting periods p multiplied by the number of periods N and task duration
-// t_{exec}: t_{o} - t_{last} > p*N + t_{exec}.
+// 2. The time duration between two consecutive heartbeats (t_{i}, t_{i-1})
+// exceeds the sum of reporting periods period_ms multiplied by the number of periods N
+// and task duration task_duration_ms: t_{i} - t_{i-1} > period_ms * num_periods + task_duration_ms, or
+// 3. The time duration between the observation and the last reported heartbeat
+// (t_{o}, t_{last}) exceeds the sum of reporting periods period_ms multiplied by the
+// number of periods num_periods and task duration task_duration_ms: t_{o} - t_{last} > period_ms * num_periods +
+// task_duration_ms.
+//
+// Health monitor provides two registration methods, for health monitoring:
+// * Implicit. Recommended for standard usecases.
+// If SB bundle opts for implicit heartbeat registration,
+// `HealthConfiguration` should be part of an `InstanceConfiguration` map.
+// It will be read by HM agent for the Service Bundle Registry, at startup time.
+// * Explicit. Use for custom monitoring intervals not tied to the bundle
+// instance's lifecycle events. If SB bundle opts for explicit heartbeat
+// registration, `HealthConfiguration` should be registered with the VM Health
+// Monitor through it's registration RPC channel at runtime. See also:
+// `${ANDROID_ROOT}/system/software_defined_vehicle/service_bundles_registry/proto/health_monitor_registration_service.proto`
 message HealthConfiguration {
   // Required.
   // Whether the service should report a heartbeat to the VM Health Monitor.
   bool is_heartbeat_monitored = 1;
 
   // Optional.
-  // Initial delay in milliseconds is the time between the service starts and its first heartbeat.
   // Ignored if is_heartbeat_monitored is set to false.
+  // Initial delay in milliseconds is the time between the monitoring
+  // registration and its first heartbeat. If monitoring registration is
+  // configured implicitly, monitoring starts the moment the service bundle
+  // instance has reached STARTED orchestration state. That is, when
+  // `ServiceBundle.on_start()` has completed executing. If monitoring
+  // registration is requested explicitly via rpc, monitoring starts the moment
+  // the RPC registration call has completed.
   optional uint64 initial_delay_ms = 2;
 
   // Optional.
-  // Period of reporting a heartbeat in milliseconds which corresponds to the periodicity of
-  // executing a business logic by the SDV service. This value should be larger than 0.
-  // Ignored if is_heartbeat_monitored is set to false.
+  // Period of reporting a heartbeat in milliseconds which corresponds to the
+  // periodicity of executing a business logic by the SDV service. This value
+  // should be larger than 0. Ignored if is_heartbeat_monitored is set to false.
   optional uint64 period_ms = 3;
 
   // Optional.
-  // The number of periods missing a heartbeat before the Health Monitor should consider the
-  // service as unhealthy. This value should be larger than 0.
+  // The number of periods missing a heartbeat before the Health Monitor should
+  // consider the service as unhealthy. This value should be larger than 0.
   // Ignored if is_heartbeat_monitored is set to false.
   optional uint64 num_periods = 4;
 
   // Optional.
-  // Duration of the business logic the SDV service bundle executes in milliseconds.
-  // Ignored if is_heartbeat_monitored is set to false.
+  // Duration of the business logic the SDV service bundle executes in
+  // milliseconds. Ignored if is_heartbeat_monitored is set to false.
   optional uint64 task_duration_ms = 5;
 }
 
+message QosMonitoringConfiguration {
+  // Optional - If absent, heartbeat frequency monitoring is disabled for this SB.
+  //
+  // The maximum allowable interval between consecutive heartbeats (in milliseconds).
+  // A QoS frequency violation is triggered if the time elapsed between
+  // two heartbeats exceeds this threshold.
+  optional uint64 qos_period_threshold_ms = 1;
+
+  // Optional - If absent, heartbeat latency monitoring is disabled for this SB.
+  //
+  // The maximum allowable interval between data publication and data processing timestamps (in milliseconds).
+  // A QoS latency violation is triggered if the time elapsed between
+  // data publication and data processing timestamps exceeds this threshold.
+  optional uint64 qos_latency_threshold_ms = 2;
+}
