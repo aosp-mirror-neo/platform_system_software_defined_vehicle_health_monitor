@@ -67,3 +67,20 @@ service_units {
     name: "com-android-sdv-health-health-monitor-registration-service"
     acl_names: "MonitoredClients"
 }
+
+# Permissions
+
+publisher {
+    message: "com.android.sdv.health.VmHealth"
+    topic: "com-android-sdv-health-vm-health-unique"
+}
+
+server {
+    service: "com.android.sdv.health.HealthMonitorRegistrationService"
+    channel: "com-android-sdv-health-health-monitor-registration-service"
+}
+
+server {
+    service: "com.android.sdv.health.HealthMonitorService"
+    channel: "com-android-sdv-health-health-monitor-service"
+}
