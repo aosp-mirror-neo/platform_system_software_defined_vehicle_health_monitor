@@ -37,6 +37,7 @@ rust_binary {
         "libsdv_mw_rs_sdv_comms",
         "libtokio",
         "libbinder_rs",
+        "libsdv_health_monitor_flags",
     ],
     defaults: [
         "sdv_tracing@rust_defaults",
