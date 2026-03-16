@@ -581,6 +581,64 @@ mod tests {
                 assert_eq!(monitors.get(&fqin1).unwrap().recovery_state, SBRecoveryState::Normal);
             }
 
+            // A duplicated normal event should be ignored and not trigger a monitor update.
+            timeout(
+                Duration::from_millis(200),
+                event_tx.send(ServiceBundleRecoveryEvent {
+                    fqin: fqin1.clone(),
+                    state: SBOrchestrationState {
+                        recovery_state: SBRecoveryState::Normal,
+                        lifecycle_state: SBLifecycleState::Created,
+                    },
+                }),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+            assert!(
+                timeout(Duration::from_millis(200), monitor_rx.changed()).await.is_err(),
+                "Duplicated Normal::Created event should not trigger a state change"
+            );
+
+            // A new FailedRecovery event is propagated.
+            event_tx
+                .send(ServiceBundleRecoveryEvent {
+                    fqin: fqin1.clone(),
+                    state: SBOrchestrationState {
+                        recovery_state: SBRecoveryState::FailedRecovery,
+                        lifecycle_state: SBLifecycleState::Created,
+                    },
+                })
+                .await
+                .unwrap();
+
+            timeout(Duration::from_millis(200), monitor_rx.changed()).await.unwrap().unwrap();
+            {
+                let monitors = monitor_rx.borrow_and_update();
+                assert_eq!(
+                    monitors.get(&fqin1).unwrap().recovery_state,
+                    SBRecoveryState::FailedRecovery
+                );
+            }
+
+            // A duplicated FailedRecovery event should be ignored and not trigger a monitor update.
+            event_tx
+                .send(ServiceBundleRecoveryEvent {
+                    fqin: fqin1.clone(),
+                    state: SBOrchestrationState {
+                        recovery_state: SBRecoveryState::FailedRecovery,
+                        lifecycle_state: SBLifecycleState::Created,
+                    },
+                })
+                .await
+                .unwrap();
+
+            assert!(
+                timeout(Duration::from_millis(200), monitor_rx.changed()).await.is_err(),
+                "Duplicated FailedRecovery event should be ignored"
+            );
+
             // Second event for the same fqin
             event_tx
                 .send(ServiceBundleRecoveryEvent {
@@ -601,6 +659,26 @@ mod tests {
                     SBRecoveryState::Recovering
                 );
             }
+
+            // A duplicated Recovering event should be ignored and not trigger a monitor update.
+            timeout(
+                Duration::from_millis(200),
+                event_tx.send(ServiceBundleRecoveryEvent {
+                    fqin: fqin1.clone(),
+                    state: SBOrchestrationState {
+                        recovery_state: SBRecoveryState::Recovering,
+                        lifecycle_state: SBLifecycleState::Created,
+                    },
+                }),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+            assert!(
+                timeout(Duration::from_millis(200), monitor_rx.changed()).await.is_err(),
+                "Duplicated Recovering event should not trigger a state change"
+            );
 
             // Event for a different fqin
             event_tx
