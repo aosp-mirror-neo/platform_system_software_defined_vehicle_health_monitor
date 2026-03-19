@@ -28,9 +28,11 @@ service_bundle {
   # For reading details about failing and unhealthy services.
   client {
     service: "com.android.sdv.health.HealthMonitorService"
+    channel: "health-monitor-service"
   }
   # For retrieving the health of a VM.
   subscriber {
     message: "com.android.sdv.health.VmHealth"
+    topic: "vm-health"
   }
 }

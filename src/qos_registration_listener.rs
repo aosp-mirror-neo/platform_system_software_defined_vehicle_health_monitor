@@ -24,6 +24,7 @@ use sdv_comms::id::ServiceFqin;
 use sdv_comms::sd::UnitType;
 use sdv_status_rs::SdvStatusCode;
 use sdv_status_rs::{SdvResult, SdvStatus};
+use std::fmt;
 use std::future;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -89,7 +90,7 @@ async fn send_qos_registration_command<T: Comms>(
     let config = config_db.get_qos_config(fqin).await?.and_then(|r| r.get(&topic)).ok_or(
         SdvStatus::with_message(
             SdvStatusCode::NotFound,
-            "QoS config not registered with SBR for this topic:{topic}",
+            "Qos config not registered with SBR for this topic:{topic}",
         ),
     )?;
 
@@ -126,6 +127,19 @@ pub struct QosMonitorId {
     unit_name: String,
     topic: String,
 }
+
+impl fmt::Display for QosMonitorId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ID:\n\
+            * HB topic: {}\n\
+            * HB unit_name: {}\n\
+            * FQIN of receiver: {}\n",
+            self.topic, self.unit_name, self.fqin
+        )
+    }
+}
 impl QosMonitorId {
     pub fn new(fqin: ServiceFqin, unit_name: String, topic: String) -> Self {
         Self { fqin, unit_name, topic }
@@ -133,9 +147,9 @@ impl QosMonitorId {
 }
 
 fn build_qos_hb_unit_type() -> SdvResult<UnitType> {
-    const PACKAGE: &str = "com.sdv.google.health";
-    const BUNDLE: &str = "HealthMonitorServiceBundle";
-    const TYPE_NAME: &str = "QualityOfServiceHeartbeat";
+    const PACKAGE: &str = "com.android.sdv.health";
+    const BUNDLE: &str = "";
+    const TYPE_NAME: &str = "QosHeartbeat";
     UnitType::builder()
         .set_sdv_package_name(PACKAGE)
         .set_service_bundle_name(BUNDLE)

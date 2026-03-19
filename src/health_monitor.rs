@@ -18,6 +18,7 @@ use crate::monitor_manager::MonitorManager;
 use crate::monitor_model::AgentName;
 use crate::monitor_model::EntityHealthStatus;
 use crate::monitor_model::EntityMonitor;
+use crate::qos_registration_listener::QosMonitorId;
 use crate::sb_recovery_monitor::{SBLifecycleState, SBRecoveryMonitor, SBRecoveryState};
 use async_trait::async_trait;
 use authorization::AuthorizationImpl;
@@ -106,6 +107,7 @@ impl HealthMonitor {
                     &monitor_manager.hb_monitors.borrow(),
                     &monitor_manager.sb_recovery_monitors.borrow(),
                     &monitor_manager.agent_crash_monitors,
+                    &monitor_manager.qos_monitors.borrow(),
                     &health_reporter,
                 );
 
@@ -123,6 +125,7 @@ impl HealthMonitor {
         heartbeat_monitors: &HashMap<ServiceFqin, Box<dyn EntityMonitor>>,
         sb_recovery_state_monitors: &HashMap<ServiceFqin, SBRecoveryMonitor>,
         agent_crash_monitors: &HashMap<AgentName, Box<dyn EntityMonitor>>,
+        qos_monitors: &HashMap<QosMonitorId, qos_monitor::QosMonitor>,
         health_reporter: &HealthReporter,
     ) {
         let hbs_missed = heartbeat_monitors
@@ -135,9 +138,14 @@ impl HealthMonitor {
         let sb_recoveries_failed = sb_recovery_state_monitors
             .values()
             .any(|m| m.get_health_status() == EntityHealthStatus::Unhealthy);
+        let qos_violations_detected = qos_monitors
+            .values()
+            .any(|m| !matches!(m.get_status(), Ok(qos_monitor::QosStatus::Healthy)));
 
         let recoveries_failed = agent_recoveries_failed || sb_recoveries_failed;
-        if let Err(err) = health_reporter.report_vm_health(hbs_missed, recoveries_failed) {
+        if let Err(err) =
+            health_reporter.report_vm_health(hbs_missed, recoveries_failed, qos_violations_detected)
+        {
             error!("Failed to report vm health: {err}");
         }
     }
@@ -271,7 +279,7 @@ pub mod tests {
             let (_, hb_recovery_events) = mpsc::channel(1);
             let (_, qos_events) = mpsc::channel(1);
             let monitor_manager = MonitorManager::new(
-                ImplicitMonitoringConfigRepo::new().into(),
+                ImplicitMonitoringConfigRepo::new(Arc::new(|| "testvm".to_string())).into(),
                 hb_registration_commands,
                 hb_registration_commands_sink,
                 hb_recovery_events,
@@ -321,12 +329,14 @@ pub mod tests {
 
         let agent_crash_monitors = HashMap::new();
         let sb_recovery_monitors = HashMap::new();
+        let qos_monitors = HashMap::new();
 
         // ACT
         HealthMonitor::report_state(
             &hb_monitors,
             &sb_recovery_monitors,
             &agent_crash_monitors,
+            &qos_monitors,
             &health_reporter,
         );
 
@@ -337,6 +347,7 @@ pub mod tests {
     async fn test_vm_report_unhealthy_when_agent_crash_monitoring_reports_unhealthy() {
         // SETUP
         let hb_monitors = HashMap::new();
+        let qos_monitors = HashMap::new();
 
         let unhealthy_agent_monitor =
             TestMonitor { healthy: EntityHealthStatus::Unhealthy, ..TestMonitor::default() };
@@ -363,6 +374,7 @@ pub mod tests {
             &hb_monitors,
             &sb_recovery_monitors,
             &agent_crash_monitors,
+            &qos_monitors,
             &health_reporter,
         );
 
@@ -374,6 +386,7 @@ pub mod tests {
         // SETUP
         let hb_monitors = HashMap::new();
         let agent_crash_monitors = HashMap::new();
+        let qos_crash_monitors = HashMap::new();
 
         let mut publisher = MockMessagePublisher::<VmHealth>::new();
         publisher
@@ -408,6 +421,7 @@ pub mod tests {
             &hb_monitors,
             &sb_recovery_monitors,
             &agent_crash_monitors,
+            &qos_crash_monitors,
             &health_reporter,
         );
 
@@ -419,6 +433,7 @@ pub mod tests {
         // SETUP
         let hb_monitors = HashMap::new();
         let agent_crash_monitors = HashMap::new();
+        let qos_monitors = HashMap::new();
 
         let mut publisher = MockMessagePublisher::<VmHealth>::new();
         publisher
@@ -444,6 +459,7 @@ pub mod tests {
             &hb_monitors,
             &sb_recovery_monitors,
             &agent_crash_monitors,
+            &qos_monitors,
             &health_reporter,
         );
 
@@ -455,6 +471,7 @@ pub mod tests {
         // SETUP
         let hb_monitors = HashMap::new();
         let agent_crash_monitors = HashMap::new();
+        let qos_monitors = HashMap::new();
 
         let mut publisher = MockMessagePublisher::<VmHealth>::new();
         publisher
@@ -480,6 +497,7 @@ pub mod tests {
             &hb_monitors,
             &sb_recovery_monitors,
             &agent_crash_monitors,
+            &qos_monitors,
             &health_reporter,
         );
 
@@ -662,7 +680,7 @@ pub mod tests {
             let (_, hb_recovery_events) = mpsc::channel(1);
             let (_, qos_events) = mpsc::channel(1);
             let monitor_manager = MonitorManager::new(
-                ImplicitMonitoringConfigRepo::new().into(),
+                ImplicitMonitoringConfigRepo::new(Arc::new(|| "testvm".to_string())).into(),
                 hb_registration_commands,
                 hb_registration_commands_sink,
                 hb_recovery_events,

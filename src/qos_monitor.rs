@@ -81,7 +81,7 @@ impl QosMonitor {
         Self { listening_task, latest_ticks: rx, config: qos_config, current_time_provider }
     }
 
-    fn get_status(&self) -> SdvResult<QosStatus> {
+    pub fn get_status(&self) -> SdvResult<QosStatus> {
         let (previous_tick, current_tick) = match &*self.latest_ticks.borrow() {
             (Some(Ok(prev)), Ok(last)) => (Some(*prev), *last),
             (None, Ok(last)) => (None, *last),
@@ -179,10 +179,17 @@ impl Drop for QosMonitor {
 impl DumpStateReporter for QosMonitor {
     fn dump(
         &self,
-        _writer: &mut dyn std::io::Write,
+        writer: &mut dyn std::io::Write,
         _args: &[&std::ffi::CStr],
     ) -> Result<(), std::io::Error> {
-        todo!()
+        writeln!(
+            writer,
+            "MONITOR INTERNAL DATA:\n\
+            health status: {:?}\n\
+            task running: {}\n",
+            self.get_status(),
+            !self.listening_task.is_finished()
+        )
     }
 }
 
@@ -303,7 +310,6 @@ mod tests {
 
         let expected = (Some(Ok(tick1)), Ok(tick2));
         let mut monitor =
-        // let monitor =
             QosMonitor::new(Ok(tick1), stream::iter(vec![Ok(tick2)]), config, mock_time_provider);
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
@@ -392,18 +398,23 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic(expected = "not yet implemented")]
-    async fn test_dump_panics() {
+    async fn test_dump() {
+        let now: SystemTime = Timestamp { seconds: 500, nanos: 0, ..Default::default() }.into();
+        let mock_time_provider = Box::new(move || now);
+
         let config = QosConfig {
             latency_threshold: Some(Duration::from_millis(100)),
             frequency_threshold: Some(Duration::from_millis(200)),
         };
-        let now = SystemTime::now();
         let tick = QosTick { latency: Duration::from_millis(50), received_time: now };
-        let monitor =
-            QosMonitor::new(Ok(tick), stream::pending(), config, Box::new(SystemTime::now));
+        let monitor = QosMonitor::new(Ok(tick), stream::pending(), config, mock_time_provider);
         let mut writer = Vec::new();
-        let _ = monitor.dump(&mut writer, &[]);
+        monitor.dump(&mut writer, &[]).unwrap();
+        let output = String::from_utf8(writer).unwrap();
+
+        assert!(output.contains("MONITOR INTERNAL DATA:"));
+        assert!(output.contains("health status: Ok(Healthy)"));
+        assert!(output.contains("task running: true"));
     }
 
     #[test]

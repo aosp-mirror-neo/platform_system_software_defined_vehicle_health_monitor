@@ -35,6 +35,7 @@ message VmHealth {
     // HM on each VM will publish a health report for its VM.
     model: MULTI_PUB
   };
+
   // Required.
   // Describes if all monitored service bundles are healthy and report
   // heartbeats on time.
@@ -44,6 +45,11 @@ message VmHealth {
   // Describes if all service bundles which should be currently running on the
   // VM are alive.
   bool all_service_bundles_alive = 2;
+
+  // Required.
+  // Indicates if QoS requirements for all service bundles which should be currently running
+  // on the VM are satisfied.
+  bool qos_violations_detected = 3;
 }
 
 // Topic describing health of a monitored SDV service bundle.
@@ -61,6 +67,7 @@ message ServiceHeartbeat {
     // Each service bundle should be able to publish a service heartbeat.
     model: MULTI_PUB
   };
+
   // Required.
   // The current timestamp.
   .google.protobuf.Timestamp timestamp = 1;

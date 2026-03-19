@@ -294,7 +294,19 @@ impl DumpStateReporter for MonitorManager {
             },
         )?;
 
-        writeln!(writer, "\nRECOVERY MONITORING:")?;
+        writeln!(writer, "\nQOS MONITORING:")?;
+        if self.qos_monitors.borrow().is_empty() {
+            writeln!(writer, "NO ACTIVE MONITORS")?;
+        }
+        self.qos_monitors.borrow().iter().enumerate().try_for_each(
+            |(i, (id, monitor))| -> Result<(), Error> {
+                write!(writer, "MONITOR {i}:\n{}", id)?;
+                monitor.dump(writer, args)?;
+                Result::Ok(())
+            },
+        )?;
+
+        writeln!(writer, "RECOVERY MONITORING:")?;
         writeln!(writer, "a. Agent monitoring:")?;
         if self.agent_crash_monitors.is_empty() {
             writeln!(writer, "NO ACTIVE MONITORS")?;
@@ -341,11 +353,14 @@ impl Drop for MonitorManager {
 mod tests {
     use super::*;
     use crate::monitor_model::test_utils::TestMonitor;
+    use crate::qos_config::QosConfig;
+    use crate::qos_monitor::QosTick;
     use crate::tests::utils::StringWriter;
-
+    use futures::stream;
     use sdv_comms::id::ServiceFqin;
     use std::future;
     use std::str::FromStr;
+    use std::time::SystemTime;
     use tokio::sync::mpsc::channel;
 
     mod recovery_monitor_management_tests {
@@ -1050,19 +1065,32 @@ mod tests {
     async fn test_monitor_manager_dumpsys() {
         // TODO(tmot) add qos monitors to this test
         let monitored_sb_fqin = "vm:com.google.test.TestSB/instance1";
+        let monitored_sb_fqin = ServiceFqin::from_str(monitored_sb_fqin).unwrap();
 
         let agent_crash_monitors = HashMap::from([(
             "Hello Agent".to_string(),
             Box::new(TestMonitor::default()) as Box<dyn EntityMonitor>,
         )]);
 
-        let (_, qos_monitors) = watch::channel(HashMap::new());
+        let (_, qos_monitors) = watch::channel(HashMap::from([(
+            QosMonitorId::new(
+                monitored_sb_fqin.clone(),
+                "my-unit".to_string(),
+                "my-topic".to_string(),
+            ),
+            QosMonitor::new(
+                Ok(QosTick::default()),
+                stream::pending(),
+                QosConfig { latency_threshold: None, frequency_threshold: None },
+                Box::new(SystemTime::now),
+            ),
+        )]));
         let (_, hb_monitors) = watch::channel(HashMap::from([(
-            ServiceFqin::from_str(monitored_sb_fqin).unwrap(),
+            monitored_sb_fqin.clone(),
             Box::new(TestMonitor::default()) as Box<dyn EntityMonitor>,
         )]));
         let (_, sb_recovery_monitors) = watch::channel(HashMap::from([(
-            ServiceFqin::from_str(monitored_sb_fqin).unwrap(),
+            monitored_sb_fqin.clone(),
             SBOrchestrationState {
                 recovery_state: SBRecoveryState::Normal,
                 lifecycle_state: SBLifecycleState::Created,
@@ -1088,7 +1116,17 @@ mod tests {
                 TEST MONITOR\n\
                 Healthy: Healthy\n\
                 Config: HeartbeatMonitoringConfig { initial_delay_ms: 0, period_ms: 0, num_periods: 0, task_duration_ms: 0 }\n\
-                    \n\
+                \n\
+                QOS MONITORING:\n\
+                MONITOR 0:\n\
+                ID:\n\
+                * HB topic: my-topic\n\
+                * HB unit_name: my-unit\n\
+                * FQIN of receiver: vm:com.google.test.TestSB/instance1\n\
+                MONITOR INTERNAL DATA:\n\
+                health status: Ok(Healthy)\n\
+                task running: true\n\
+                \n\
                 RECOVERY MONITORING:\n\
                 a. Agent monitoring:\n\
                 MONITOR 0:\n\
@@ -1102,7 +1140,7 @@ mod tests {
                 Recovery State: Normal\n\
                 Lifecycle State: Created\n\
                 Health Status: Healthy\n",
-            "Dumpsys is not what we expect. Here it is:{}",
+            "Dumpsys is not what we expect. Here it is, check what is wrong:{}",
             writer.sink
         );
     }
