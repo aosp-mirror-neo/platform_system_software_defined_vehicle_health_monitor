@@ -89,3 +89,8 @@ server {
     service: "com.android.sdv.health.HealthMonitorService"
     channel: "com-android-sdv-health-health-monitor-service"
 }
+
+subscriber {
+    message: "com.android.sdv.health.ServiceHeartbeat"
+    allow_all_topics: true
+}
