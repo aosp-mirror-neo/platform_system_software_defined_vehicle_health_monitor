@@ -122,7 +122,7 @@ rust_test {
     ],
     ld_flags: ["-Wl,--no-as-needed"],
     require_root: true,
-    test_config_template: ":sdv_authz_enforcement_flag_enabled_config_template",
+    test_config_template: ":sdv_authz_enforcement_flag_permissions_only_config_template",
 }
 
 prebuilt_etc {
