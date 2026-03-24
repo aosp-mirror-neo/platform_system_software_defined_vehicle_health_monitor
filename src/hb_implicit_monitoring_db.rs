@@ -102,7 +102,7 @@ fn retrieve_implicit_health_config_from_sbr(
         .flat_map(|(package, name, path)| {
             parse_bundle_health_config(&path)
                 .unwrap_or_else(|e| {
-                    error!("Error {:?} parsing health config from path: {:?}", e, path);
+                    warn!("Error {:?} parsing health config from path: {:?}. Possibly SDV1.0 syntax, ignoring.", e, path);
                     HashMap::default()
                 })
                 .into_iter()
