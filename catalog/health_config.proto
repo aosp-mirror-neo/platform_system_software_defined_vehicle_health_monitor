@@ -81,12 +81,10 @@ message InstanceConfiguration {
 // Monitor through it's registration RPC channel at runtime. See also:
 // `${ANDROID_ROOT}/system/software_defined_vehicle/service_bundles_registry/proto/health_monitor_registration_service.proto`
 message HealthConfiguration {
-  // Required.
-  // Whether the service should report a heartbeat to the VM Health Monitor.
-  bool is_heartbeat_monitored = 1;
+  reserved 1;
+  reserved "is_heartbeat_monitored";
 
-  // Optional.
-  // Ignored if is_heartbeat_monitored is set to false.
+  // Required.
   // Initial delay in milliseconds is the time between the monitoring
   // registration and its first heartbeat. If monitoring registration is
   // configured implicitly, monitoring starts the moment the service bundle
@@ -94,24 +92,23 @@ message HealthConfiguration {
   // `ServiceBundle.on_start()` has completed executing. If monitoring
   // registration is requested explicitly via rpc, monitoring starts the moment
   // the RPC registration call has completed.
-  optional uint64 initial_delay_ms = 2;
+  uint64 initial_delay_ms = 2;
 
-  // Optional.
+  // Required.
   // Period of reporting a heartbeat in milliseconds which corresponds to the
   // periodicity of executing a business logic by the SDV service. This value
-  // should be larger than 0. Ignored if is_heartbeat_monitored is set to false.
-  optional uint64 period_ms = 3;
+  // should be larger than 0.
+  uint64 period_ms = 3;
 
-  // Optional.
+  // Required.
   // The number of periods missing a heartbeat before the Health Monitor should
   // consider the service as unhealthy. This value should be larger than 0.
-  // Ignored if is_heartbeat_monitored is set to false.
-  optional uint64 num_periods = 4;
+  uint64 num_periods = 4;
 
-  // Optional.
+  // Required.
   // Duration of the business logic the SDV service bundle executes in
-  // milliseconds. Ignored if is_heartbeat_monitored is set to false.
-  optional uint64 task_duration_ms = 5;
+  // milliseconds.
+  uint64 task_duration_ms = 5;
 }
 
 message QosMonitoringConfiguration {

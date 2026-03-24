@@ -158,11 +158,10 @@ mod tests {
     static HEALTHY_SERVICE_FQIN_STR: &str = "vm:com.google.sdv.HealthyServiceBundle/sample";
     static DEFAULT_VALID_CONFIG: LazyLock<HealthConfiguration> =
         LazyLock::new(|| HealthConfiguration {
-            is_heartbeat_monitored: true,
-            initial_delay_ms: Some(100),
-            period_ms: Some(200),
-            num_periods: Some(3),
-            task_duration_ms: Some(40),
+            initial_delay_ms: 100,
+            period_ms: 200,
+            num_periods: 3,
+            task_duration_ms: 40,
             special_fields: protobuf::SpecialFields::default(),
         });
 
@@ -288,7 +287,7 @@ mod tests {
 
         let request = RegisterConfigurationRequest {
             config: MessageField::some(HealthConfiguration {
-                period_ms: Some(0), // Invalid: period_ms must be greater than 0
+                period_ms: 0, // Invalid: period_ms must be greater than 0
                 ..Default::default()
             }),
             ..Default::default()
@@ -313,10 +312,10 @@ mod tests {
 
         let request = RegisterConfigurationRequest {
             config: MessageField::some(HealthConfiguration {
-                initial_delay_ms: Some(100),
-                period_ms: Some(200),
-                num_periods: Some(3),
-                task_duration_ms: Some(40),
+                initial_delay_ms: 100,
+                period_ms: 200,
+                num_periods: 3,
+                task_duration_ms: 40,
                 ..Default::default()
             }),
             ..Default::default()
