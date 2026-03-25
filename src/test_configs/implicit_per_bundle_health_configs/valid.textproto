@@ -19,7 +19,6 @@ instance_config {
   key: "instance1"
   value {
     health_config {
-      is_heartbeat_monitored: true
       initial_delay_ms: 100
       period_ms: 50
       num_periods: 1
@@ -31,7 +30,6 @@ instance_config {
   key: "instance2"
   value {
     health_config {
-      is_heartbeat_monitored: true
       initial_delay_ms: 200
       period_ms: 100
       num_periods: 2

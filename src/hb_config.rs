@@ -60,10 +60,10 @@ impl TryFrom<HealthConfiguration> for HeartbeatMonitoringConfig {
     type Error = String;
     fn try_from(value: HealthConfiguration) -> Result<Self, Self::Error> {
         let config = Self {
-            initial_delay_ms: value.initial_delay_ms.unwrap_or_default(),
-            period_ms: value.period_ms.unwrap_or_default(),
-            num_periods: value.num_periods.unwrap_or_default(),
-            task_duration_ms: value.task_duration_ms.unwrap_or_default(),
+            initial_delay_ms: value.initial_delay_ms,
+            period_ms: value.period_ms,
+            num_periods: value.num_periods,
+            task_duration_ms: value.task_duration_ms,
         };
         HeartbeatMonitoringConfig::validate_health_config(&config).map(|_| config)
     }
@@ -76,10 +76,10 @@ mod tests {
     #[test]
     fn test_try_from_valid_health_configuration() {
         let health_config = HealthConfiguration {
-            initial_delay_ms: Some(100),
-            period_ms: Some(200),
-            num_periods: Some(3),
-            task_duration_ms: Some(40),
+            initial_delay_ms: 100,
+            period_ms: 200,
+            num_periods: 3,
+            task_duration_ms: 40,
             ..Default::default()
         };
 
@@ -97,10 +97,10 @@ mod tests {
     #[test]
     fn test_try_from_health_configuration_with_invalid_period_ms() {
         let health_config = HealthConfiguration {
-            initial_delay_ms: Some(100),
-            period_ms: Some(0), // Invalid: period_ms must be greater than 0
-            num_periods: Some(3),
-            task_duration_ms: Some(40),
+            initial_delay_ms: 100,
+            period_ms: 0, // Invalid: period_ms must be greater than 0
+            num_periods: 3,
+            task_duration_ms: 40,
             ..Default::default()
         };
 
@@ -113,10 +113,10 @@ mod tests {
     #[test]
     fn test_try_from_health_configuration_with_invalid_num_periods() {
         let health_config = HealthConfiguration {
-            initial_delay_ms: Some(100),
-            period_ms: Some(200),
-            num_periods: Some(0), // Invalid: num_periods must be greater than 0
-            task_duration_ms: Some(40),
+            initial_delay_ms: 100,
+            period_ms: 200,
+            num_periods: 0, // Invalid: num_periods must be greater than 0
+            task_duration_ms: 40,
             ..Default::default()
         };
 

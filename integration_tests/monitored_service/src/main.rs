@@ -70,8 +70,8 @@ async fn main() {
         publish_heartbeat_loop(
             dt_publisher,
             should_publish_heartbeats_clone,
-            health_config.period_ms.unwrap(),
-            health_config.period_ms.unwrap(),
+            health_config.period_ms,
+            health_config.period_ms,
         )
         .await;
     });
@@ -184,11 +184,10 @@ fn read_health_config() -> HealthConfiguration {
     let task_duration_ms = read_positive_int("task_duration_ms");
 
     HealthConfiguration {
-        is_heartbeat_monitored: true,
-        initial_delay_ms: Some(initial_delay_ms as u64),
-        period_ms: Some(period_ms as u64),
-        num_periods: Some(num_periods as u64),
-        task_duration_ms: Some(task_duration_ms as u64),
+        initial_delay_ms: initial_delay_ms as u64,
+        period_ms: period_ms as u64,
+        num_periods: num_periods as u64,
+        task_duration_ms: task_duration_ms as u64,
         ..Default::default()
     }
 }
