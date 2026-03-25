@@ -103,11 +103,11 @@ fn connect_persistently_to_orchestrator(
 const SB_EVENTS_BUFFER_SIZE: usize = 100;
 
 impl SbRecoveryEventSourceImpl {
-    pub fn setup() -> (Self, mpsc::Receiver<ServiceBundleRecoveryEvent>) {
+    pub fn setup(vm_name: &'static str) -> (Self, mpsc::Receiver<ServiceBundleRecoveryEvent>) {
         let (tx, rx) = mpsc::channel(SB_EVENTS_BUFFER_SIZE);
         (
             Self {
-                orchestrator_connection_setup_task: tokio::task::spawn_blocking(|| {
+                orchestrator_connection_setup_task: tokio::task::spawn_blocking(move || {
                     let persistent_connecter = Arc::into_inner(PersistentBinderConnection::new(
                         get_orchestrator_binder_service,
                     ))
@@ -116,7 +116,7 @@ impl SbRecoveryEventSourceImpl {
                     connect_persistently_to_orchestrator(
                         &persistent_connecter,
                         BnServiceBundleInstanceStateChangeListener::new_binder(
-                            RecoveryEventCallback { tx },
+                            RecoveryEventCallback { tx, vm_name },
                             BinderFeatures::default(),
                         ),
                         subscribe_to_recovery_events,
@@ -137,6 +137,7 @@ impl Drop for SbRecoveryEventSourceImpl {
 
 struct RecoveryEventCallback {
     tx: mpsc::Sender<ServiceBundleRecoveryEvent>,
+    vm_name: &'static str,
 }
 
 impl Interface for RecoveryEventCallback {}
@@ -150,7 +151,7 @@ impl IServiceBundleInstanceStateChangeListener for RecoveryEventCallback {
         expected_lifecycle_state: ServiceBundleInstanceLifecycleState,
     ) -> binder::Result<()> {
         let event = ServiceBundleRecoveryEvent {
-            fqin: ServiceFqin::from_aidl(aidl_fqin),
+            fqin: ServiceFqin::from_aidl(aidl_fqin, self.vm_name),
             state: SBOrchestrationState::from(&new_recovery_state, &expected_lifecycle_state)?,
         };
         self.tx.blocking_send(event).map_err(|err| {
@@ -164,13 +165,13 @@ impl IServiceBundleInstanceStateChangeListener for RecoveryEventCallback {
 }
 
 trait FromAidlFqin {
-    fn from_aidl(aidl_fqin: &AidlServiceFqin) -> Self;
+    fn from_aidl(aidl_fqin: &AidlServiceFqin, vm_name: &str) -> Self;
 }
 
 impl FromAidlFqin for ServiceFqin {
-    fn from_aidl(aidl_fqin: &AidlServiceFqin) -> Self {
+    fn from_aidl(aidl_fqin: &AidlServiceFqin, vm_name: &str) -> Self {
         ServiceFqin::builder()
-            .sdv_vm_name(&aidl_fqin.sdvVmName)
+            .sdv_vm_name(vm_name)
             .sdv_package_name(&aidl_fqin.sdvPackageName)
             .service_bundle_name(&aidl_fqin.serviceBundleName)
             .service_instance_name(&aidl_fqin.serviceInstanceName)
@@ -287,10 +288,11 @@ mod tests {
     #[tokio::test]
     async fn test_recovery_event_callback_on_service_bundle_instance_state_changed() {
         let (tx, mut rx) = mpsc::channel(1);
-        let callback = RecoveryEventCallback { tx };
+        let expected_vm_name = "correct-vm";
+        let callback = RecoveryEventCallback { tx, vm_name: expected_vm_name };
 
         let aidl_fqin = AidlServiceFqin {
-            sdvVmName: "instance1".to_string(),
+            sdvVmName: "wrong-vm-from-binder".to_string(),
             sdvPackageName: "com.android.sdv.sample.oem.health.monitored".to_string(),
             serviceBundleName: "SampleHMBundle".to_string(),
             serviceInstanceName: "test1".to_string(),
@@ -310,7 +312,8 @@ mod tests {
         }
 
         let received_event = rx.recv().await.unwrap();
-        assert_eq!(received_event.fqin, ServiceFqin::from_aidl(&aidl_fqin));
+        assert_eq!(received_event.fqin.get_sdv_vm_name(), expected_vm_name);
+        assert_ne!(received_event.fqin.get_sdv_vm_name(), aidl_fqin.sdvVmName);
         assert_eq!(received_event.state.recovery_state, SBRecoveryState::Normal);
     }
 
