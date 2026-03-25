@@ -20,17 +20,25 @@ import "sdv/vsidl/v1/annotations.proto";
 
 package com.android.sdv.health;
 
-// Topic describing health of a monitored SDV service bundle.
+// Message describing the health of a specific communication channel.
+//
+// QoS monitoring supports various communication methods (e.g., multipub, multisub, streaming RPC).
+// Each monitored communication involves at least one listener responsible for reporting QoS heartbeats
+// upon receiving monitored messages.
 message QosHeartbeat {
   option (.sdv.vsidl.v1.publication) = {
     message_count: 2
     model: SINGLE_PUB
   };
   // Required.
-  // The current timestamp (at heartbeat “send” time).
+  // Current timestamp at heartbeat transmission. The heartbeat should be sent
+  // immediately after the listener receives the related QoS-monitored message.
   .google.protobuf.Timestamp timestamp = 1;
 
   // Required.
-  // The timestamp that corresponds to the underlying “data” creation time.
+  // Timestamp corresponding to the creation time of the underlying data. This
+  // implies that, in addition to the data of interest, the monitored message includes
+  // a data creation timestamp field. The listener is responsible for routing this
+  // timestamp to the QosHeartbeat upon receiving a QoS-monitored message.
   .google.protobuf.Timestamp data_timestamp = 2;
 }

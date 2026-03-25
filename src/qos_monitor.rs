@@ -15,8 +15,10 @@
 #![allow(unused_variables)]
 
 use crate::qos_config::QosConfig;
+use crate::qos_registration_listener::QosMonitorId;
 use futures::Stream;
 use futures::StreamExt;
+use health_api::health_monitor_service::QosViolation;
 use health_api::qos_heartbeat::QosHeartbeat;
 use log::error;
 use sdv_dump::DumpStateReporter;
@@ -201,6 +203,26 @@ impl DumpStateReporter for QosMonitor {
             self.get_status(),
             !self.listening_task.is_finished()
         )
+    }
+}
+
+pub fn build_qos_violation(id: &QosMonitorId, status: SdvResult<QosStatus>) -> QosViolation {
+    let (latency_violation_detected, frequency_violation_detected, sdv_internal_error) =
+        match status {
+            Ok(s) => (
+                s.latency_violation_detected,
+                s.hb_frequency_violation_detected || s.wire_frequency_violation_detected,
+                false,
+            ),
+            Err(_) => (false, false, true),
+        };
+
+    QosViolation {
+        id: protobuf::MessageField::some(id.into()),
+        latency_violation_detected,
+        frequency_violation_detected,
+        sdv_internal_error,
+        ..Default::default()
     }
 }
 
@@ -526,6 +548,41 @@ mod tests {
 
         // Case: previous_tick is None
         assert!(!check_wire_frequency_violation(Some(threshold), None, curr).unwrap());
+    }
+
+    #[test]
+    fn test_build_qos_violation() {
+        let fqin = sdv_comms::id::ServiceFqin::builder()
+            .sdv_vm_name("ignored")
+            .sdv_package_name("com.google.test")
+            .service_bundle_name("TestSB")
+            .service_instance_name("instance1")
+            .build()
+            .unwrap();
+        let id = QosMonitorId::new(fqin.clone(), "unit".to_string(), "topic".to_string());
+
+        // Case 1: OK status with latency violation
+        let status = Ok(QosStatus { latency_violation_detected: true, ..Default::default() });
+        let violation = build_qos_violation(&id, status);
+        assert_eq!(violation.id.as_ref().unwrap().subscriber_fqin, fqin.to_string());
+        assert_eq!(violation.id.as_ref().unwrap().qos_hb_topic, "topic");
+        assert!(violation.latency_violation_detected);
+        assert!(!violation.frequency_violation_detected);
+        assert!(!violation.sdv_internal_error);
+
+        // Case 2: OK status with frequency violation
+        let status = Ok(QosStatus { hb_frequency_violation_detected: true, ..Default::default() });
+        let violation = build_qos_violation(&id, status);
+        assert!(!violation.latency_violation_detected);
+        assert!(violation.frequency_violation_detected);
+        assert!(!violation.sdv_internal_error);
+
+        // Case 3: Error status
+        let status = Err(SdvStatus::new(SdvStatusCode::Internal));
+        let violation = build_qos_violation(&id, status);
+        assert!(!violation.latency_violation_detected);
+        assert!(!violation.frequency_violation_detected);
+        assert!(violation.sdv_internal_error);
     }
 
     #[test]

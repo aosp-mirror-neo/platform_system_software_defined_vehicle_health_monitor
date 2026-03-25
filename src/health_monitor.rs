@@ -28,8 +28,9 @@ use health_api::{
     health_monitor_service::{
         ListAllServiceBundlesRequest, ListAllServiceBundlesResponse,
         ListCrashingServiceBundlesRequest, ListCrashingServiceBundlesResponse,
-        ListRecoveringServiceBundlesRequest, ListRecoveringServiceBundlesResponse,
-        ListUnhealthyMonitoredServiceBundlesRequest, ListUnhealthyMonitoredServiceBundlesResponse,
+        ListQosViolationsRequest, ListQosViolationsResponse, ListRecoveringServiceBundlesRequest,
+        ListRecoveringServiceBundlesResponse, ListUnhealthyMonitoredServiceBundlesRequest,
+        ListUnhealthyMonitoredServiceBundlesResponse,
     },
     health_topic::VmHealth,
 };
@@ -52,6 +53,7 @@ use std::{
     thread,
     time::Instant,
 };
+use tap::Pipe;
 use tracing::instrument;
 
 pub mod agent_monitor;
@@ -245,6 +247,29 @@ impl HealthMonitorService for HealthMonitor {
             fqin: unhealthy_services,
             ..Default::default()
         })
+    }
+
+    #[instrument(skip(self))]
+    async fn ListQosViolations(
+        &self,
+        _fqin: sdv_comms::id::ServiceFqin,
+        _request: &ListQosViolationsRequest,
+    ) -> sdv_status_rs::SdvResult<ListQosViolationsResponse> {
+        self.monitor_manager
+            .qos_monitors
+            .borrow()
+            .iter()
+            .filter_map(|(id, monitor)| {
+                let status = monitor.get_status();
+                if is_healthy(&status) {
+                    return None;
+                }
+
+                Some(qos_monitor::build_qos_violation(id, status))
+            })
+            .collect::<Vec<_>>()
+            .pipe(|violations| ListQosViolationsResponse { violations, ..Default::default() })
+            .pipe(Ok)
     }
 }
 
@@ -546,8 +571,12 @@ pub mod tests {
         let (_tx, sb_recovery_monitors) = watch::channel(sb_recovery_monitors_map);
         let (_tx, hb_monitors) = watch::channel(HashMap::new());
 
-        let monitor_manager =
-            MonitorManager::new_for_test(sb_recovery_monitors, hb_monitors, HashMap::new());
+        let monitor_manager = MonitorManager::new_for_test(
+            sb_recovery_monitors,
+            hb_monitors,
+            HashMap::new(),
+            watch::channel(HashMap::new()).1,
+        );
         let hm = HealthMonitor::new(Arc::new(monitor_manager));
 
         let request = ListCrashingServiceBundlesRequest { ..Default::default() };
@@ -588,8 +617,12 @@ pub mod tests {
         let (_tx, sb_recovery_monitors) = watch::channel(sb_recovery_monitors_map);
         let (_tx, hb_monitors) = watch::channel(HashMap::new());
 
-        let monitor_manager =
-            MonitorManager::new_for_test(sb_recovery_monitors, hb_monitors, HashMap::new());
+        let monitor_manager = MonitorManager::new_for_test(
+            sb_recovery_monitors,
+            hb_monitors,
+            HashMap::new(),
+            watch::channel(HashMap::new()).1,
+        );
         let hm = HealthMonitor::new(Arc::new(monitor_manager));
 
         let request = ListRecoveringServiceBundlesRequest { ..Default::default() };
@@ -644,8 +677,12 @@ pub mod tests {
         let (_tx, sb_recovery_monitors) = watch::channel(sb_recovery_monitors_map);
         let (_tx, hb_monitors) = watch::channel(HashMap::new());
 
-        let monitor_manager =
-            MonitorManager::new_for_test(sb_recovery_monitors, hb_monitors, HashMap::new());
+        let monitor_manager = MonitorManager::new_for_test(
+            sb_recovery_monitors,
+            hb_monitors,
+            HashMap::new(),
+            watch::channel(HashMap::new()).1,
+        );
         let hm = HealthMonitor::new(Arc::new(monitor_manager));
 
         let request = ListAllServiceBundlesRequest { ..Default::default() };
@@ -687,8 +724,12 @@ pub mod tests {
         let (_tx, sb_recovery_monitors) = watch::channel(HashMap::new());
         let (_tx, hb_monitors) = watch::channel(hb_monitors_map);
 
-        let monitor_manager =
-            MonitorManager::new_for_test(sb_recovery_monitors, hb_monitors, HashMap::new());
+        let monitor_manager = MonitorManager::new_for_test(
+            sb_recovery_monitors,
+            hb_monitors,
+            HashMap::new(),
+            watch::channel(HashMap::new()).1,
+        );
         let hm = HealthMonitor::new(Arc::new(monitor_manager));
 
         let request = ListUnhealthyMonitoredServiceBundlesRequest { ..Default::default() };
@@ -701,6 +742,140 @@ pub mod tests {
             .unwrap();
 
         assert_eq!(response.fqin, vec![unhealthy_fqin.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_list_service_bundles_with_qos_violations() {
+        use crate::qos_config::QosConfig;
+        use crate::qos_monitor::{QosMonitor, QosTick};
+        use crate::qos_registration_listener::QosMonitorId;
+        use futures::stream;
+        use health_api::qos_heartbeat::QosHeartbeat;
+        use std::time::SystemTime;
+
+        let fqin1 = ServiceFqin::from_str("vm:com.google.test.Bundle1/instance1").unwrap();
+        let fqin2 = ServiceFqin::from_str("vm:com.google.test.Bundle2/instance1").unwrap();
+        let fqin3 = ServiceFqin::from_str("vm:com.google.test.Bundle3/instance1").unwrap();
+
+        let qos_id1 = QosMonitorId::new(fqin1.clone(), "unit1".to_string(), "topic1".to_string());
+        let qos_id2 = QosMonitorId::new(fqin2.clone(), "unit1".to_string(), "topic2".to_string());
+        let qos_id3 = QosMonitorId::new(fqin3.clone(), "unit1".to_string(), "topic3".to_string());
+
+        let qos_config_latency = QosConfig {
+            latency_threshold: Some(Duration::from_millis(10)),
+            frequency_threshold: None,
+        };
+
+        // Monitor 1: Healthy
+        let monitor1 = QosMonitor::new(
+            Ok(QosTick::default()),
+            stream::pending(),
+            qos_config_latency.clone(),
+            Box::new(SystemTime::now),
+        );
+
+        // Monitor 2: Latency violation
+        let hb_late = QosHeartbeat {
+            data_timestamp: protobuf::MessageField::some(Timestamp {
+                seconds: 1000,
+                nanos: 0,
+                ..Default::default()
+            }),
+            timestamp: protobuf::MessageField::some(Timestamp {
+                seconds: 1000,
+                nanos: 100_000_000,
+                ..Default::default()
+            }), // 100ms latency
+            ..Default::default()
+        };
+        let late_tick = QosTick::try_from(hb_late).unwrap();
+
+        let monitor2 = QosMonitor::new(
+            Ok(late_tick),
+            stream::pending(),
+            qos_config_latency,
+            Box::new(SystemTime::now),
+        );
+
+        // Monitor 3: Frequency violation
+        let qos_config_frequency = QosConfig {
+            latency_threshold: None,
+            frequency_threshold: Some(Duration::from_millis(100)),
+        };
+        let hb_freq = QosHeartbeat {
+            data_timestamp: protobuf::MessageField::some(Timestamp {
+                seconds: 1000,
+                nanos: 0,
+                ..Default::default()
+            }),
+            timestamp: protobuf::MessageField::some(Timestamp {
+                seconds: 1000,
+                nanos: 0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let freq_tick = QosTick::try_from(hb_freq).unwrap();
+
+        let now: SystemTime = Timestamp {
+            seconds: 1000,
+            nanos: 500_000_000, // 500ms later than freq_tick.received_time
+            ..Default::default()
+        }
+        .into();
+
+        let monitor3 = QosMonitor::new(
+            Ok(freq_tick),
+            stream::pending(),
+            qos_config_frequency,
+            Box::new(move || now),
+        );
+
+        let qos_monitors_map =
+            HashMap::from([(qos_id1, monitor1), (qos_id2, monitor2), (qos_id3, monitor3)]);
+
+        let (_tx1, sb_recovery_monitors) = watch::channel(HashMap::new());
+        let (_tx2, hb_monitors) = watch::channel(HashMap::new());
+        let (_tx3, qos_monitors) = watch::channel(qos_monitors_map);
+
+        let monitor_manager = MonitorManager::new_for_test(
+            sb_recovery_monitors,
+            hb_monitors,
+            HashMap::new(),
+            qos_monitors,
+        );
+        let hm = HealthMonitor::new(Arc::new(monitor_manager));
+
+        let request = ListQosViolationsRequest { ..Default::default() };
+        let response = hm
+            .ListQosViolations(
+                ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).expect("Valid Fqin"),
+                &request,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.violations.len(), 2);
+
+        let violation_monitor2 = response
+            .violations
+            .iter()
+            .find(|v| v.id.as_ref().unwrap().subscriber_fqin == fqin2.to_string())
+            .expect("Violation for Bundle2 not found");
+        assert_eq!(violation_monitor2.id.as_ref().unwrap().qos_hb_topic, "topic2");
+        assert!(violation_monitor2.latency_violation_detected);
+        assert!(!violation_monitor2.frequency_violation_detected);
+        assert!(!violation_monitor2.sdv_internal_error);
+
+        let violation_monitor3 = response
+            .violations
+            .iter()
+            .find(|v| v.id.as_ref().unwrap().subscriber_fqin == fqin3.to_string())
+            .expect("Violation for Bundle3 not found");
+        assert_eq!(violation_monitor3.id.as_ref().unwrap().qos_hb_topic, "topic3");
+        assert!(!violation_monitor3.latency_violation_detected);
+        assert!(violation_monitor3.frequency_violation_detected);
+        assert!(!violation_monitor3.sdv_internal_error);
     }
 
     pub mod utils {

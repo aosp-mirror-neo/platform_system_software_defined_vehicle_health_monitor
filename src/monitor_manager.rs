@@ -100,8 +100,8 @@ impl MonitorManager {
         sb_recovery_monitors: watch::Receiver<HashMap<ServiceFqin, SBRecoveryMonitor>>,
         hb_monitors: watch::Receiver<HashMap<ServiceFqin, Box<dyn EntityMonitor>>>,
         agent_crash_monitors: HashMap<AgentName, Box<dyn EntityMonitor>>,
+        qos_monitors: watch::Receiver<HashMap<QosMonitorId, QosMonitor>>,
     ) -> Self {
-        let (_, qos_monitors) = watch::channel(HashMap::new());
         Self {
             sb_recovery_events_processing: tokio::spawn(async {}),
             hb_registration_commands_processing: tokio::spawn(async {}),
