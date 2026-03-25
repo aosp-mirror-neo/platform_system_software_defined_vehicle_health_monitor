@@ -14,65 +14,6 @@
 # proto-file: //system/software_defined_vehicle/middleware/service_authz/proto/sdv/authz/policy/authz_policy.proto
 # proto-message: AuthzPolicy
 
-# ACL policies for HealthMonitor Unit Types.
-
-acls {
-    name: "Internal"
-    include: "com.android.sdv.health.HealthMonitorServiceBundle"
-}
-
-acls {
-    name: "MonitoringClients"
-    include: "com.android.sdv.someip.SomeIpBroker"
-    include: "com.android.sdv.sample.oem.health.monitoring.VmHMBundle"
-}
-
-acls {
-    name: "MonitoredClients"
-    include: "com.android.sdv.sample.oem.*"
-    include: "com.android.sdv.performance.*"
-}
-
-unit_types {
-    name: "VmHealth"
-    acl_names: "Internal"
-}
-
-unit_types {
-    name: "HealthMonitorRegistrationService"
-    acl_names: "Internal"
-}
-
-unit_types {
-    name: "HealthMonitorService"
-    acl_names: "Internal"
-}
-
-unit_types {
-    name: "ServiceHeartbeat"
-    acl_names: "MonitoredClients"
-}
-
-unit_types {
-    name: "QosHeartbeat"
-    acl_names: "MonitoredClients"
-}
-
-service_units {
-    name: "com-android-sdv-health-vm-health-unique"
-    acl_names: "MonitoringClients"
-}
-
-service_units {
-    name: "com-android-sdv-health-health-monitor-service"
-    acl_names: "MonitoringClients"
-}
-
-service_units {
-    name: "com-android-sdv-health-health-monitor-registration-service"
-    acl_names: "MonitoredClients"
-}
-
 # Permissions
 
 publisher {
@@ -92,5 +33,10 @@ server {
 
 subscriber {
     message: "com.android.sdv.health.ServiceHeartbeat"
+    allow_all_topics: true
+}
+
+subscriber {
+    message: "com.android.sdv.health.QosHeartbeat"
     allow_all_topics: true
 }
