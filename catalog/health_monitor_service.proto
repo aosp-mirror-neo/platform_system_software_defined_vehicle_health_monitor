@@ -29,6 +29,10 @@ service HealthMonitorService {
   rpc ListCrashingServiceBundles(ListCrashingServiceBundlesRequest)
       returns (ListCrashingServiceBundlesResponse) {}
 
+  // Returns the list of recovering SDV service bundles.
+  rpc ListRecoveringServiceBundles(ListRecoveringServiceBundlesRequest)
+      returns (ListRecoveringServiceBundlesResponse) {}
+
   // Returns the list of unhealthy monitored SDV service bundles, which registered for reporting
   // heartbeats but failed to report heartbeats on time.
   rpc ListUnhealthyMonitoredServiceBundles(ListUnhealthyMonitoredServiceBundlesRequest)
@@ -38,7 +42,6 @@ service HealthMonitorService {
 message ListAllServiceBundlesRequest {}
 
 message ListAllServiceBundlesResponse {
-  // Optional.
   // List of FQINs of the service bundles that are created or started on this VM.
   // It is empty if no service bundles are created or started on this VM.
   repeated string fqin = 1;
@@ -47,16 +50,28 @@ message ListAllServiceBundlesResponse {
 message ListCrashingServiceBundlesRequest {}
 
 message ListCrashingServiceBundlesResponse {
-  // Optional.
   // List of FQINs of the crashed SDV service bundles on this VM.
   // It is empty if no service bundles are in the crashed state on this VM.
+  repeated string fqin = 1;
+}
+
+message ListRecoveringServiceBundlesRequest {}
+
+message ListRecoveringServiceBundlesResponse {
+  // List of FQINs of the bundles that are currently recovering on this VM.
+  // A bundle is recovering if it has crashed or a transition to a new state
+  // has failed, and it's configured to be restartable. In this case, the
+  // orchestrator informs the HM that it's trying to recover the bundle.
+  // Eventually, this bundle should be in the ListAllServiceBundles or
+  // ListCrashingServiceBundles responses, unless it was destroyed (in which
+  // case it won't be returned by any of these API calls).
+  // It is empty if no service bundles are in the recovering state on this VM.
   repeated string fqin = 1;
 }
 
 message ListUnhealthyMonitoredServiceBundlesRequest {}
 
 message ListUnhealthyMonitoredServiceBundlesResponse {
-  // Optional.
   // List of FQINs of the unhealthy SDV service bundles on this VM which did not report their
   // heartbeats on time according to their registered health configuration.
   // It is empty if all monitored service bundles on the VM report their heartbeats on time.
