@@ -47,7 +47,8 @@ genrule {
         " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
-        " --package-name com.android.sdv.health",
+        " --package-name com.android.sdv.health" +
+        " --target-api pdk29",
     out: [
         "vsidl-config.binpb",
     ],
@@ -78,7 +79,8 @@ genrule {
         " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
-        " --package-name com.android.sdv.sample.oem.health.monitored",
+        " --package-name com.android.sdv.sample.oem.health.monitored" +
+        " --target-api pdk29",
     out: [
         "vsidl-config.binpb",
     ],
@@ -109,7 +111,8 @@ genrule {
         " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
-        " --package-name com.android.sdv.sample.oem.health.monitoring",
+        " --package-name com.android.sdv.sample.oem.health.monitoring" +
+        " --target-api pdk29",
     out: [
         "vsidl-config.binpb",
     ],
@@ -141,7 +144,8 @@ genrule {
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
         " --package-name com.android.sdv.health" +
-        " --service-bundle-name HealthMonitorServiceBundle",
+        " --service-bundle-name HealthMonitorServiceBundle" +
+        " --target-api pdk29",
     out: [
         "vsidl-config.binpb",
     ],
@@ -173,7 +177,8 @@ genrule {
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
         " --package-name com.android.sdv.health" +
-        " --service-bundle-name FakeBundle",
+        " --service-bundle-name FakeBundle" +
+        " --target-api pdk29",
     out: [
         "vsidl-config.binpb",
     ],
@@ -205,7 +210,8 @@ genrule {
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
         " --package-name com.android.sdv.sample.oem.health.monitored" +
-        " --service-bundle-name SampleHMBundle",
+        " --service-bundle-name SampleHMBundle" +
+        " --target-api pdk29",
     out: [
         "vsidl-config.binpb",
     ],
@@ -237,7 +243,8 @@ genrule {
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
         " --package-name com.android.sdv.sample.oem.health.monitored" +
-        " --service-bundle-name SecondSampleHMBundle",
+        " --service-bundle-name SecondSampleHMBundle" +
+        " --target-api pdk29",
     out: [
         "vsidl-config.binpb",
     ],
@@ -269,7 +276,8 @@ genrule {
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
         " --output-path $(genDir) " +
         " --package-name com.android.sdv.sample.oem.health.monitoring" +
-        " --service-bundle-name VmHMBundle",
+        " --service-bundle-name VmHMBundle" +
+        " --target-api pdk29",
     out: [
         "vsidl-config.binpb",
     ],
@@ -298,7 +306,8 @@ genrule {
     cmd: "$(location vsidl_rc_generator) " +
         " --vsidl-path  system/software_defined_vehicle/vsidl/language/src/protos" +
         " --catalog-path system/software_defined_vehicle/health_monitor/catalog" +
-        " --output-path $(genDir) ",
+        " --output-path $(genDir) " +
+        " --target-api pdk29",
     out: [
         "vsidl-config.binpb",
     ],
