@@ -27,6 +27,7 @@ use health_api::{
     health_monitor_service::{
         ListAllServiceBundlesRequest, ListAllServiceBundlesResponse,
         ListCrashingServiceBundlesRequest, ListCrashingServiceBundlesResponse,
+        ListRecoveringServiceBundlesRequest, ListRecoveringServiceBundlesResponse,
         ListUnhealthyMonitoredServiceBundlesRequest, ListUnhealthyMonitoredServiceBundlesResponse,
     },
     health_topic::VmHealth,
@@ -206,6 +207,24 @@ impl HealthMonitorService for HealthMonitor {
             .collect();
 
         Ok(ListCrashingServiceBundlesResponse { fqin: crashing_bundles, ..Default::default() })
+    }
+
+    #[instrument(skip(self))]
+    async fn ListRecoveringServiceBundles(
+        &self,
+        _fqin: sdv_comms::id::ServiceFqin,
+        _request: &ListRecoveringServiceBundlesRequest,
+    ) -> sdv_status_rs::SdvResult<ListRecoveringServiceBundlesResponse> {
+        let recovering_bundles = self
+            .monitor_manager
+            .sb_recovery_monitors
+            .borrow()
+            .iter()
+            .filter(|(_, orch_state)| orch_state.recovery_state == SBRecoveryState::Recovering)
+            .map(|(fqin, _)| fqin.to_string())
+            .collect();
+
+        Ok(ListRecoveringServiceBundlesResponse { fqin: recovering_bundles, ..Default::default() })
     }
 
     #[instrument(skip(self))]
@@ -543,6 +562,48 @@ pub mod tests {
             .unwrap();
 
         assert_eq!(response.fqin, vec![crashing_fqin.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_list_recovering_service_bundles() {
+        let recovering_fqins =
+            ServiceFqin::from_str("vm:com.google.test.Recovering/instance").unwrap();
+
+        let sb_recovery_monitors_map = HashMap::from([
+            (
+                ServiceFqin::from_str("vm:com.google.test.Running/instance").unwrap(),
+                SBOrchestrationState {
+                    recovery_state: SBRecoveryState::Normal,
+                    lifecycle_state: SBLifecycleState::Started,
+                },
+            ),
+            (
+                recovering_fqins.clone(),
+                SBOrchestrationState {
+                    recovery_state: SBRecoveryState::Recovering,
+                    lifecycle_state: SBLifecycleState::Created,
+                },
+            ),
+        ]);
+
+        let (_tx, sb_recovery_monitors) = watch::channel(sb_recovery_monitors_map);
+        let (_tx, hb_monitors) = watch::channel(HashMap::new());
+
+        let monitor_manager =
+            MonitorManager::new_for_test(sb_recovery_monitors, hb_monitors, HashMap::new());
+        let hm = HealthMonitor::new(Arc::new(monitor_manager));
+
+        let request = ListRecoveringServiceBundlesRequest { ..Default::default() };
+
+        let response = hm
+            .ListRecoveringServiceBundles(
+                ServiceFqin::from_str(HEALTHY_SERVICE_FQIN_STR).expect("Valid Fqin"),
+                &request,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.fqin, vec![recovering_fqins.to_string()]);
     }
 
     #[tokio::test]
