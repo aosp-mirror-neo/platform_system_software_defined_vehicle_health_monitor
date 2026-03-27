@@ -28,7 +28,6 @@ use sdv_status_rs::{SdvResult, SdvStatus, SdvStatusCode};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::OnceCell;
 
@@ -40,24 +39,23 @@ pub struct InstanceConfig {
 
 pub struct ImplicitMonitoringConfigRepo {
     data: OnceCell<HashMap<ServiceFqin, InstanceConfig>>,
-    vm_name_provider: Arc<dyn Fn() -> String + Send + Sync>,
+    vm_name: &'static str,
 }
 
 impl ImplicitMonitoringConfigRepo {
-    pub fn new(vm_name_provider: Arc<dyn Fn() -> String + Send + Sync>) -> Self {
-        ImplicitMonitoringConfigRepo { data: OnceCell::default(), vm_name_provider }
+    pub fn new(vm_name: &'static str) -> Self {
+        ImplicitMonitoringConfigRepo { data: OnceCell::default(), vm_name }
     }
 
     async fn get_sb_instance_config(
         &self,
         fqin: &ServiceFqin,
     ) -> SdvResult<Option<&InstanceConfig>> {
-        let vm_name_provider = Arc::clone(&self.vm_name_provider);
+        let vm_name = self.vm_name;
         self.data
             .get_or_try_init(|| async {
                 tokio::task::spawn_blocking(move || {
-                    let vm_name = vm_name_provider();
-                    retrieve_implicit_health_config_from_sbr(get_bundle_metadata, &vm_name)
+                    retrieve_implicit_health_config_from_sbr(get_bundle_metadata, vm_name)
                 })
                 .await
                 .map_err(|e| {
@@ -102,7 +100,7 @@ fn retrieve_implicit_health_config_from_sbr(
         .flat_map(|(package, name, path)| {
             parse_bundle_health_config(&path)
                 .unwrap_or_else(|e| {
-                    error!("Error {:?} parsing health config from path: {:?}", e, path);
+                    warn!("Error {:?} parsing health config from path: {:?}. Possibly SDV1.0 syntax, ignoring.", e, path);
                     HashMap::default()
                 })
                 .into_iter()
@@ -218,10 +216,7 @@ pub mod tests {
 
         impl ImplicitMonitoringConfigRepo {
             pub fn new_for_testing(inner: HashMap<ServiceFqin, InstanceConfig>) -> Self {
-                Self {
-                    data: OnceCell::new_with(Some(inner)),
-                    vm_name_provider: Arc::new(|| "testvm".to_string()),
-                }
+                Self { data: OnceCell::new_with(Some(inner)), vm_name: "testvm" }
             }
         }
     }

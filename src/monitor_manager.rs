@@ -100,8 +100,8 @@ impl MonitorManager {
         sb_recovery_monitors: watch::Receiver<HashMap<ServiceFqin, SBRecoveryMonitor>>,
         hb_monitors: watch::Receiver<HashMap<ServiceFqin, Box<dyn EntityMonitor>>>,
         agent_crash_monitors: HashMap<AgentName, Box<dyn EntityMonitor>>,
+        qos_monitors: watch::Receiver<HashMap<QosMonitorId, QosMonitor>>,
     ) -> Self {
-        let (_, qos_monitors) = watch::channel(HashMap::new());
         Self {
             sb_recovery_events_processing: tokio::spawn(async {}),
             hb_registration_commands_processing: tokio::spawn(async {}),
@@ -1124,7 +1124,7 @@ mod tests {
                 * HB unit_name: my-unit\n\
                 * FQIN of receiver: vm:com.google.test.TestSB/instance1\n\
                 MONITOR INTERNAL DATA:\n\
-                health status: Ok(Healthy)\n\
+                health status: Ok(QosStatus { hb_frequency_violation_detected: false, wire_frequency_violation_detected: false, latency_violation_detected: false })\n\
                 task running: true\n\
                 \n\
                 RECOVERY MONITORING:\n\

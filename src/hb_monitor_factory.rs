@@ -22,6 +22,7 @@ use crate::hb_stream_ops::with_monitoring_start_event;
 use crate::{monitor_model::EntityMonitor, power_state::PowerStateReceiverFactory};
 use futures::stream::StreamExt;
 use futures::Stream;
+use log::error;
 use mockall::automock;
 use sdv_comms::sd::UnitNameDiscoveryArgs;
 use sdv_comms::{id::ServiceFqin, sd::UnitType};
@@ -111,7 +112,10 @@ const SANITY_TIMEOUT: Duration = Duration::from_secs(2);
 async fn with_sanity_timeout<T>(f: impl Future<Output = SdvResult<T>>) -> SdvResult<T> {
     f.pipe(|f| timeout(SANITY_TIMEOUT, f))
         .await
-        .map_err(|_timeout| SdvStatus::new(sdv_status_rs::SdvStatusCode::DeadlineExceeded))
+        .map_err(|_e| {
+            error!("Sanity timeout {SANITY_TIMEOUT:?} exceeded. When using implicit hb registration, register HB pub asynchronously, from on_start()");
+            SdvStatus::new(sdv_status_rs::SdvStatusCode::DeadlineExceeded)
+        })
         .flatten()
 }
 

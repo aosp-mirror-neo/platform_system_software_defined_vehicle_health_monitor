@@ -140,6 +140,17 @@ impl fmt::Display for QosMonitorId {
         )
     }
 }
+
+impl From<&QosMonitorId> for health_api::health_monitor_service::ViolationId {
+    fn from(id: &QosMonitorId) -> Self {
+        Self {
+            subscriber_fqin: id.fqin.to_string(),
+            qos_hb_topic: id.topic.clone(),
+            ..Default::default()
+        }
+    }
+}
+
 impl QosMonitorId {
     pub fn new(fqin: ServiceFqin, unit_name: String, topic: String) -> Self {
         Self { fqin, unit_name, topic }

@@ -66,6 +66,7 @@ async fn main() -> anyhow::Result<()> {
 
     let context = create_context()?;
     let id = context.get_self_fqin();
+    let vm_name: &'static str = Box::leak(id.get_sdv_vm_name().to_string().into_boxed_str());
     dm.set_self_fqin(id.to_string());
     dm.set_agent_state("FQIN retrieved");
     let sd = Arc::new(ServiceDiscoveryManager::new(context));
@@ -74,7 +75,8 @@ async fn main() -> anyhow::Result<()> {
         config.monitored_binders,
         power_state_receiver_factory.as_ref(),
     );
-    let (_sb_recovery_events_source, sb_recovery_events) = SbRecoveryEventSourceImpl::setup();
+    let (_sb_recovery_events_source, sb_recovery_events) =
+        SbRecoveryEventSourceImpl::setup(vm_name);
     let (hb_registration_commands_tx, hb_registration_commands_rx) = mpsc::channel(100);
     let hb_monitor_factory = HeartbeatMonitorFactoryImpl::<CommsImpl>::new(
         context,
@@ -82,9 +84,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(PowerStateReceiverFactoryImpl::new()),
     );
 
-    let sbr_config_repo = Arc::new(ImplicitMonitoringConfigRepo::new(Arc::new(move || {
-        context.get_self_fqin().get_sdv_vm_name().to_string()
-    })));
+    let sbr_config_repo = Arc::new(ImplicitMonitoringConfigRepo::new(vm_name));
     let (_qos_registration, qos_commands) =
         QosRegistrationListener::new::<CommsImpl>(context, sd, Arc::clone(&sbr_config_repo));
     let monitor_manager = MonitorManager::new(

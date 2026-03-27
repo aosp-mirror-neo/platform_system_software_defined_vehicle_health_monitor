@@ -15,8 +15,10 @@
 #![allow(unused_variables)]
 
 use crate::qos_config::QosConfig;
+use crate::qos_registration_listener::QosMonitorId;
 use futures::Stream;
 use futures::StreamExt;
+use health_api::health_monitor_service::QosViolation;
 use health_api::qos_heartbeat::QosHeartbeat;
 use log::error;
 use sdv_dump::DumpStateReporter;
@@ -41,12 +43,11 @@ impl Default for QosTick {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub enum QosStatus {
-    Healthy,
-    UnhealthyLatencyViolation,
-    UnhealthyWireFrequencyViolation,
-    UnhealthyHBFrequencyViolation,
+#[derive(Debug, PartialEq, Default, Clone, Copy)]
+pub struct QosStatus {
+    hb_frequency_violation_detected: bool,
+    wire_frequency_violation_detected: bool,
+    latency_violation_detected: bool,
 }
 
 pub struct QosMonitor {
@@ -91,25 +92,37 @@ impl QosMonitor {
             }
         };
 
+        let mut status = QosStatus::default();
+
         if check_hb_frequency_violation(
             self.config.frequency_threshold,
             current_tick,
             (self.current_time_provider)(),
         )? {
-            return Ok(QosStatus::UnhealthyHBFrequencyViolation);
+            status.hb_frequency_violation_detected = true;
         }
+
         if check_wire_latency_violation(self.config.latency_threshold, current_tick) {
-            return Ok(QosStatus::UnhealthyLatencyViolation);
+            status.latency_violation_detected = true;
         }
+
         if check_wire_frequency_violation(
             self.config.frequency_threshold,
             previous_tick,
             current_tick,
         )? {
-            return Ok(QosStatus::UnhealthyWireFrequencyViolation);
+            status.wire_frequency_violation_detected = true;
         }
-        Ok(QosStatus::Healthy)
+
+        Ok(status)
     }
+}
+
+pub fn is_healthy(status: &SdvResult<QosStatus>) -> bool {
+    let status = if let Ok(s) = status { s } else { return false };
+    !status.hb_frequency_violation_detected
+        && !status.latency_violation_detected
+        && !status.wire_frequency_violation_detected
 }
 
 fn check_hb_frequency_violation(
@@ -190,6 +203,26 @@ impl DumpStateReporter for QosMonitor {
             self.get_status(),
             !self.listening_task.is_finished()
         )
+    }
+}
+
+pub fn build_qos_violation(id: &QosMonitorId, status: SdvResult<QosStatus>) -> QosViolation {
+    let (latency_violation_detected, frequency_violation_detected, sdv_internal_error) =
+        match status {
+            Ok(s) => (
+                s.latency_violation_detected,
+                s.hb_frequency_violation_detected || s.wire_frequency_violation_detected,
+                false,
+            ),
+            Err(_) => (false, false, true),
+        };
+
+    QosViolation {
+        id: protobuf::MessageField::some(id.into()),
+        latency_violation_detected,
+        frequency_violation_detected,
+        sdv_internal_error,
+        ..Default::default()
     }
 }
 
@@ -286,7 +319,7 @@ mod tests {
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
         let status = monitor.get_status().unwrap();
-        assert_eq!(status, QosStatus::Healthy);
+        assert_eq!(status, QosStatus::default());
     }
 
     #[tokio::test]
@@ -314,7 +347,10 @@ mod tests {
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
         let status = monitor.get_status().unwrap();
-        assert_eq!(status, QosStatus::UnhealthyHBFrequencyViolation);
+        assert_eq!(
+            status,
+            QosStatus { hb_frequency_violation_detected: true, ..Default::default() }
+        );
     }
 
     #[tokio::test]
@@ -343,7 +379,10 @@ mod tests {
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
         let status = monitor.get_status().unwrap();
-        assert_eq!(status, QosStatus::UnhealthyWireFrequencyViolation);
+        assert_eq!(
+            status,
+            QosStatus { wire_frequency_violation_detected: true, ..Default::default() }
+        );
     }
 
     #[tokio::test]
@@ -371,7 +410,42 @@ mod tests {
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
         let status = monitor.get_status().unwrap();
-        assert_eq!(status, QosStatus::UnhealthyLatencyViolation);
+        assert_eq!(status, QosStatus { latency_violation_detected: true, ..Default::default() });
+    }
+
+    #[tokio::test]
+    async fn test_get_status_multiple_violations() {
+        let now: SystemTime = Timestamp { seconds: 500, nanos: 0, ..Default::default() }.into();
+        let mock_time_provider = Box::new(move || now);
+        let config = QosConfig {
+            latency_threshold: Some(Duration::from_millis(100)),
+            frequency_threshold: Some(Duration::from_millis(200)),
+        };
+
+        // latency is 150ms (violation), and last tick was 500ms ago (violation)
+        let tick1 = QosTick {
+            latency: Duration::from_millis(50),
+            received_time: now - Duration::from_millis(700),
+        };
+        let tick2 = QosTick {
+            latency: Duration::from_millis(150),
+            received_time: now - Duration::from_millis(500),
+        };
+
+        let expected = (Some(Ok(tick1)), Ok(tick2));
+        let mut monitor =
+            QosMonitor::new(Ok(tick1), stream::iter(vec![Ok(tick2)]), config, mock_time_provider);
+        monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
+
+        let status = monitor.get_status().unwrap();
+        assert_eq!(
+            status,
+            QosStatus {
+                hb_frequency_violation_detected: true,
+                latency_violation_detected: true,
+                ..Default::default()
+            }
+        );
     }
 
     #[tokio::test]
@@ -413,7 +487,7 @@ mod tests {
         let output = String::from_utf8(writer).unwrap();
 
         assert!(output.contains("MONITOR INTERNAL DATA:"));
-        assert!(output.contains("health status: Ok(Healthy)"));
+        assert!(output.contains("health status: Ok(QosStatus { hb_frequency_violation_detected: false, wire_frequency_violation_detected: false, latency_violation_detected: false })"));
         assert!(output.contains("task running: true"));
     }
 
@@ -477,6 +551,41 @@ mod tests {
     }
 
     #[test]
+    fn test_build_qos_violation() {
+        let fqin = sdv_comms::id::ServiceFqin::builder()
+            .sdv_vm_name("ignored")
+            .sdv_package_name("com.google.test")
+            .service_bundle_name("TestSB")
+            .service_instance_name("instance1")
+            .build()
+            .unwrap();
+        let id = QosMonitorId::new(fqin.clone(), "unit".to_string(), "topic".to_string());
+
+        // Case 1: OK status with latency violation
+        let status = Ok(QosStatus { latency_violation_detected: true, ..Default::default() });
+        let violation = build_qos_violation(&id, status);
+        assert_eq!(violation.id.as_ref().unwrap().subscriber_fqin, fqin.to_string());
+        assert_eq!(violation.id.as_ref().unwrap().qos_hb_topic, "topic");
+        assert!(violation.latency_violation_detected);
+        assert!(!violation.frequency_violation_detected);
+        assert!(!violation.sdv_internal_error);
+
+        // Case 2: OK status with frequency violation
+        let status = Ok(QosStatus { hb_frequency_violation_detected: true, ..Default::default() });
+        let violation = build_qos_violation(&id, status);
+        assert!(!violation.latency_violation_detected);
+        assert!(violation.frequency_violation_detected);
+        assert!(!violation.sdv_internal_error);
+
+        // Case 3: Error status
+        let status = Err(SdvStatus::new(SdvStatusCode::Internal));
+        let violation = build_qos_violation(&id, status);
+        assert!(!violation.latency_violation_detected);
+        assert!(!violation.frequency_violation_detected);
+        assert!(violation.sdv_internal_error);
+    }
+
+    #[test]
     fn test_qos_tick_try_from_valid() {
         let mut hb = QosHeartbeat::new();
         let mut ts_sent = Timestamp::new();
@@ -511,5 +620,29 @@ mod tests {
         let result = QosTick::try_from(hb);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().status_code(), SdvStatusCode::InvalidArgument);
+    }
+
+    #[test]
+    fn test_is_healthy() {
+        // Case 1: Healthy
+        let status = Ok(QosStatus::default());
+        assert!(is_healthy(&status));
+
+        // Case 2: Unhealthy (HB frequency violation)
+        let status = Ok(QosStatus { hb_frequency_violation_detected: true, ..Default::default() });
+        assert!(!is_healthy(&status));
+
+        // Case 3: Unhealthy (Wire frequency violation)
+        let status =
+            Ok(QosStatus { wire_frequency_violation_detected: true, ..Default::default() });
+        assert!(!is_healthy(&status));
+
+        // Case 4: Unhealthy (Latency violation)
+        let status = Ok(QosStatus { latency_violation_detected: true, ..Default::default() });
+        assert!(!is_healthy(&status));
+
+        // Case 5: Error result
+        let status = Err(SdvStatus::new(SdvStatusCode::Internal));
+        assert!(!is_healthy(&status));
     }
 }
