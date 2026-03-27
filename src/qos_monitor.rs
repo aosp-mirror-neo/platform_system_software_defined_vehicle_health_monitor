@@ -41,12 +41,11 @@ impl Default for QosTick {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub enum QosStatus {
-    Healthy,
-    UnhealthyLatencyViolation,
-    UnhealthyWireFrequencyViolation,
-    UnhealthyHBFrequencyViolation,
+#[derive(Debug, PartialEq, Default, Clone, Copy)]
+pub struct QosStatus {
+    hb_frequency_violation_detected: bool,
+    wire_frequency_violation_detected: bool,
+    latency_violation_detected: bool,
 }
 
 pub struct QosMonitor {
@@ -91,25 +90,37 @@ impl QosMonitor {
             }
         };
 
+        let mut status = QosStatus::default();
+
         if check_hb_frequency_violation(
             self.config.frequency_threshold,
             current_tick,
             (self.current_time_provider)(),
         )? {
-            return Ok(QosStatus::UnhealthyHBFrequencyViolation);
+            status.hb_frequency_violation_detected = true;
         }
+
         if check_wire_latency_violation(self.config.latency_threshold, current_tick) {
-            return Ok(QosStatus::UnhealthyLatencyViolation);
+            status.latency_violation_detected = true;
         }
+
         if check_wire_frequency_violation(
             self.config.frequency_threshold,
             previous_tick,
             current_tick,
         )? {
-            return Ok(QosStatus::UnhealthyWireFrequencyViolation);
+            status.wire_frequency_violation_detected = true;
         }
-        Ok(QosStatus::Healthy)
+
+        Ok(status)
     }
+}
+
+pub fn is_healthy(status: &SdvResult<QosStatus>) -> bool {
+    let status = if let Ok(s) = status { s } else { return false };
+    !status.hb_frequency_violation_detected
+        && !status.latency_violation_detected
+        && !status.wire_frequency_violation_detected
 }
 
 fn check_hb_frequency_violation(
@@ -286,7 +297,7 @@ mod tests {
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
         let status = monitor.get_status().unwrap();
-        assert_eq!(status, QosStatus::Healthy);
+        assert_eq!(status, QosStatus::default());
     }
 
     #[tokio::test]
@@ -314,7 +325,10 @@ mod tests {
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
         let status = monitor.get_status().unwrap();
-        assert_eq!(status, QosStatus::UnhealthyHBFrequencyViolation);
+        assert_eq!(
+            status,
+            QosStatus { hb_frequency_violation_detected: true, ..Default::default() }
+        );
     }
 
     #[tokio::test]
@@ -343,7 +357,10 @@ mod tests {
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
         let status = monitor.get_status().unwrap();
-        assert_eq!(status, QosStatus::UnhealthyWireFrequencyViolation);
+        assert_eq!(
+            status,
+            QosStatus { wire_frequency_violation_detected: true, ..Default::default() }
+        );
     }
 
     #[tokio::test]
@@ -371,7 +388,42 @@ mod tests {
         monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
 
         let status = monitor.get_status().unwrap();
-        assert_eq!(status, QosStatus::UnhealthyLatencyViolation);
+        assert_eq!(status, QosStatus { latency_violation_detected: true, ..Default::default() });
+    }
+
+    #[tokio::test]
+    async fn test_get_status_multiple_violations() {
+        let now: SystemTime = Timestamp { seconds: 500, nanos: 0, ..Default::default() }.into();
+        let mock_time_provider = Box::new(move || now);
+        let config = QosConfig {
+            latency_threshold: Some(Duration::from_millis(100)),
+            frequency_threshold: Some(Duration::from_millis(200)),
+        };
+
+        // latency is 150ms (violation), and last tick was 500ms ago (violation)
+        let tick1 = QosTick {
+            latency: Duration::from_millis(50),
+            received_time: now - Duration::from_millis(700),
+        };
+        let tick2 = QosTick {
+            latency: Duration::from_millis(150),
+            received_time: now - Duration::from_millis(500),
+        };
+
+        let expected = (Some(Ok(tick1)), Ok(tick2));
+        let mut monitor =
+            QosMonitor::new(Ok(tick1), stream::iter(vec![Ok(tick2)]), config, mock_time_provider);
+        monitor.wait_for_qos_ticks_with_timeout(&expected).await.unwrap();
+
+        let status = monitor.get_status().unwrap();
+        assert_eq!(
+            status,
+            QosStatus {
+                hb_frequency_violation_detected: true,
+                latency_violation_detected: true,
+                ..Default::default()
+            }
+        );
     }
 
     #[tokio::test]
@@ -413,7 +465,7 @@ mod tests {
         let output = String::from_utf8(writer).unwrap();
 
         assert!(output.contains("MONITOR INTERNAL DATA:"));
-        assert!(output.contains("health status: Ok(Healthy)"));
+        assert!(output.contains("health status: Ok(QosStatus { hb_frequency_violation_detected: false, wire_frequency_violation_detected: false, latency_violation_detected: false })"));
         assert!(output.contains("task running: true"));
     }
 
@@ -511,5 +563,29 @@ mod tests {
         let result = QosTick::try_from(hb);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().status_code(), SdvStatusCode::InvalidArgument);
+    }
+
+    #[test]
+    fn test_is_healthy() {
+        // Case 1: Healthy
+        let status = Ok(QosStatus::default());
+        assert!(is_healthy(&status));
+
+        // Case 2: Unhealthy (HB frequency violation)
+        let status = Ok(QosStatus { hb_frequency_violation_detected: true, ..Default::default() });
+        assert!(!is_healthy(&status));
+
+        // Case 3: Unhealthy (Wire frequency violation)
+        let status =
+            Ok(QosStatus { wire_frequency_violation_detected: true, ..Default::default() });
+        assert!(!is_healthy(&status));
+
+        // Case 4: Unhealthy (Latency violation)
+        let status = Ok(QosStatus { latency_violation_detected: true, ..Default::default() });
+        assert!(!is_healthy(&status));
+
+        // Case 5: Error result
+        let status = Err(SdvStatus::new(SdvStatusCode::Internal));
+        assert!(!is_healthy(&status));
     }
 }

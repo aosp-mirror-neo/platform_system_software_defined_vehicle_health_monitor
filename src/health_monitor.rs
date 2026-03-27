@@ -18,6 +18,7 @@ use crate::monitor_manager::MonitorManager;
 use crate::monitor_model::AgentName;
 use crate::monitor_model::EntityHealthStatus;
 use crate::monitor_model::EntityMonitor;
+use crate::qos_monitor::is_healthy;
 use crate::qos_registration_listener::QosMonitorId;
 use crate::sb_recovery_monitor::{SBLifecycleState, SBRecoveryMonitor, SBRecoveryState};
 use async_trait::async_trait;
@@ -139,9 +140,7 @@ impl HealthMonitor {
         let sb_recoveries_failed = sb_recovery_state_monitors
             .values()
             .any(|m| m.get_health_status() == EntityHealthStatus::Unhealthy);
-        let qos_violations_detected = qos_monitors
-            .values()
-            .any(|m| !matches!(m.get_status(), Ok(qos_monitor::QosStatus::Healthy)));
+        let qos_violations_detected = qos_monitors.values().any(|m| !is_healthy(&m.get_status()));
 
         let recoveries_failed = agent_recoveries_failed || sb_recoveries_failed;
         if let Err(err) =

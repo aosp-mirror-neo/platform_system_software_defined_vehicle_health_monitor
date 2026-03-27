@@ -1124,7 +1124,7 @@ mod tests {
                 * HB unit_name: my-unit\n\
                 * FQIN of receiver: vm:com.google.test.TestSB/instance1\n\
                 MONITOR INTERNAL DATA:\n\
-                health status: Ok(Healthy)\n\
+                health status: Ok(QosStatus { hb_frequency_violation_detected: false, wire_frequency_violation_detected: false, latency_violation_detected: false })\n\
                 task running: true\n\
                 \n\
                 RECOVERY MONITORING:\n\
