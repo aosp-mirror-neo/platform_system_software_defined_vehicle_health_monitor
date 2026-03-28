@@ -20,6 +20,10 @@ import "health_config.proto";
 
 // RPC Interface of the VM Health Monitor Agent for querying details about the current VM
 // health.
+//
+// Typically, an OEM bundle monitors the overall health of the SDV instance by listening to
+// high-frequency `VMHealth` publication. If violations are detected, this RPC interface can
+// be used to retrieve detailed information about the malfunctioning component.
 service HealthMonitorService {
   // Returns the list of currently running SDV service bundles that were created or started
   // by the orchestrator on this VM.
@@ -37,6 +41,46 @@ service HealthMonitorService {
   // heartbeats but failed to report heartbeats on time.
   rpc ListUnhealthyMonitoredServiceBundles(ListUnhealthyMonitoredServiceBundlesRequest)
       returns (ListUnhealthyMonitoredServiceBundlesResponse) {}
+
+  // Returns a list of QoS monitoring violations currently detected.
+  // Provides a snapshot of the current system state.
+  rpc ListQosViolations(ListQosViolationsRequest)
+      returns (ListQosViolationsResponse) {}
+}
+
+message ViolationId {
+  // Identifier of the listener in the QoS-monitored communication. This listener is
+  // responsible for publishing QoS heartbeats upon receiving QoS-relevant messages.
+  // See also qos_heartbeat.proto.
+  string subscriber_fqin = 1;
+
+  // The topic where the listener publishes QoS heartbeats that led to the violation.
+  // This matches the topic configured in the listener's health configuration.
+  // See also `InstanceConfiguration` message, `qos_config` field, in
+  // `health_config.proto`.
+  string qos_hb_topic = 2;
+}
+
+message QosViolation {
+  // Identifier of the violation source.
+  ViolationId id = 1;
+
+  // Latency violation detected. Monitored messages spending too much time in transit.
+  bool latency_violation_detected = 2;
+
+  // Frequency violation detected. Monitored messages do not reach the listener reporting
+  // QoS heartbeats within the configured maximum allowed interval.
+  bool frequency_violation_detected = 3;
+
+  // SDV internal error detected for this identifier.
+  bool sdv_internal_error = 4;
+}
+
+message ListQosViolationsRequest {}
+
+message ListQosViolationsResponse {
+  // List of QoS violations. At most one entry per QoS monitor.
+  repeated QosViolation violations = 1;
 }
 
 message ListAllServiceBundlesRequest {}
